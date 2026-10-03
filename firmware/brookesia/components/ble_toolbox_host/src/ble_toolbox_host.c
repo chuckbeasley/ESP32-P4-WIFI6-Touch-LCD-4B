@@ -369,9 +369,12 @@ esp_err_t ble_toolbox_host_init(const ble_toolbox_host_callbacks_t *cbs, void *u
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     /* Pairing: allow passkey entry and numeric comparison without forcing MITM, so
-     * "just works" devices (most keyboards) still pair with no code. */
+     * "just works" devices (most keyboards) still pair with no code. Bonding is
+     * disabled: the default leaves bonding on while distributing no keys, which
+     * leaves a peer expecting a stored long-term key that never existed and stalls
+     * reconnection after a disconnect. */
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_KEYBOARD_DISPLAY;
-    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_bonding = 0;
 
     err = nimble_port_init();
     if (err != ESP_OK) {

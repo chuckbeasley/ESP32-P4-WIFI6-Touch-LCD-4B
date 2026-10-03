@@ -32,6 +32,7 @@ static uint8_t        g_pending_addr[6];
 static bool           g_pending_random;
 static volatile bool  g_pending_connect;
 static int            g_conn_retries;
+static volatile bool  g_auto_rescan;   /* re-scan after a clean disconnect */
 
 static void tb_connect_task(void *arg)
 {
@@ -612,6 +613,13 @@ void BleToolboxApp::latchAdv(const ble_toolbox_adv_t *adv)
             slot = i;
             break;
         }
+        /* A device that rotates its private address keeps the same name; treat a
+         * matching name as the same row so it is not listed once per address. */
+        if (adv->name[0] != '\0' &&
+            strcmp(scan_latch[i].adv.name, adv->name) == 0) {
+            slot = i;
+            break;
+        }
     }
 
     if (slot < 0) {
@@ -732,6 +740,7 @@ void BleToolboxApp::onConnState(ble_toolbox_conn_state_t state, esp_err_t reason
             ESP_LOGW(TAG, "connect failed (%d); auto-retry %d/3", (int)reason, g_conn_retries);
         } else if ((int)reason == 0) {
             g_conn_retries = 0;                 /* a clean disconnect resets the count */
+            g_auto_rescan = true;               /* re-scan so the peer can be re-found */
         }
     } else if (state == BLE_TOOLBOX_CONN_CONNECTED) {
         app->conn_fail_status = 0;
@@ -1369,6 +1378,26 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
     }
 
     app->updateStatus();
+
+    /* After a clean disconnect, re-scan so the peer is re-discovered with its current
+     * address before the user reconnects — reusing a stale row otherwise times out. */
+    if (g_auto_rescan) {
+        g_auto_rescan = false;
+        if (app->ensureService()) {
+            ble_toolbox_scan_params_t p = {};
+            p.interval_ms = 100;
+            p.window_ms = 100;
+            p.passive = true;
+            p.filter_duplicates = true;
+            app->resetCounters();
+            if (ble_toolbox_host_scan_start(&p) == ESP_OK) {
+                app->scanning = true;
+                if (app->scan_state_label != nullptr) {
+                    lv_label_set_text(app->scan_state_label, "scanning");
+                }
+            }
+        }
+    }
 
     /* Keep the status-bar BLE icon in step with the connection state: grey when
      * the service is down, blue when it is up but idle, green while connected.
