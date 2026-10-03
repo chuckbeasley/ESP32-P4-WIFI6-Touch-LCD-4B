@@ -1,0 +1,37 @@
+menu "Wi-Fi Toolbox (co-processor)"
+
+    config WIFI_TOOLBOX_ALLOW_INJECTION
+        bool "Build raw-frame injection into the co-processor image"
+        default y
+        help
+            Spec section 10.5: the shipped co-processor image must be buildable
+            without frame injection, so that a product that does not offer the
+            tool cannot be made to transmit raw frames at all.
+
+            The flag has to exist on the co-processor and not only on the host:
+            the injecting code lives here, and a host-side flag would be a false
+            sense of safety. With this off, the injection engine, its frame
+            builders and its RPC handlers are compiled out, the capability report
+            says injection_available = 0, and INJECT_START answers
+            WIFI_TOOLBOX_ERR_UNSUPPORTED instead of transmitting.
+
+            Capture and the net utilities are unaffected.
+
+    config WIFI_TOOLBOX_CMD_HANDLERS
+        int "Size of the toolbox custom-RPC callback table"
+        range 8 32
+        default 12
+        help
+            How many command message IDs the toolbox may register on esp-hosted's
+            peer-data channel. That table is fixed-size, and a registration past
+            the end fails **at runtime** with nothing but a log line on the
+            co-processor's console — which is not wired to the host. From the host
+            the symptom is a command that never answers, indistinguishable from a
+            dropped link.
+
+            This is the size the toolbox asks for; wifi_toolbox_rpc.c asserts at
+            compile time that it registers no more than this, so adding a message
+            ID without room for it stops the build instead of silently dropping a
+            command at runtime.
+
+endmenu

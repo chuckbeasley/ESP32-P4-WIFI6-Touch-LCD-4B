@@ -37,6 +37,8 @@
 #include "EthernetInfo.hpp"
 #include "RS485Terminal.hpp"
 #include "XiaozhiApp.hpp"
+#include "toolbox/ToolboxApp.hpp"
+#include "bletoolbox/BleToolboxApp.hpp"
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::gui;
@@ -571,6 +573,20 @@ extern "C" void app_main(void)
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(app6), "Start Settings failed");
         auto xiaozhi_app = esp_brookesia::apps::XiaozhiApp::requestInstance();
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(xiaozhi_app), "Start Xiaozhi failed");
+    }
+
+    refresh_boot_loading(boot_loading, "Loading toolbox...", 98);
+    {
+        // The Wi-Fi Toolbox brings its esp-hosted subscriptions up on first open,
+        // not here: touching esp-hosted at install time breaks the Wi-Fi service's
+        // own bring-up.
+        auto toolbox_app = new ToolboxApp();
+        ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(toolbox_app), "Start Wi-Fi Toolbox failed");
+
+        // The BLE Toolbox brings its radio-facing service up on first open too, for
+        // the same ordering reason.
+        auto ble_toolbox_app = new BleToolboxApp();
+        ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(ble_toolbox_app), "Start BLE Toolbox failed");
     }
 
     register_wifi_status_events();

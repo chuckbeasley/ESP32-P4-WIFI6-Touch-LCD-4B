@@ -1,0 +1,40 @@
+menu "Wi-Fi Toolbox"
+
+    config TOOLBOX_ALLOW_INJECTION
+        bool "Offer frame injection in the app"
+        default y
+        help
+            With this off, InjectStart is refused on the host so the build cannot
+            ask the co-processor to transmit. On its own that would be a false
+            sense of safety — the injecting code lives in the co-processor's
+            firmware — so a shipped image must also be built with the
+            co-processor's WIFI_TOOLBOX_ALLOW_INJECTION off. That flag lives with
+            the co-processor component (components/wifi_toolbox/Kconfig).
+
+            Capture and the net utilities are unaffected.
+
+endmenu
+
+menu "BLE Toolbox"
+
+    config BLE_TOOLBOX_ALLOW_SPAM
+        bool "Compile the BLE Toolbox's advertisement transmit path"
+        default y
+        help
+            Builds the BLE Spam screen and the code behind it. The gate is
+            enforced in this firmware: an explicit acknowledgement, a duration
+            capped and re-checked on every tick, non-connectable and
+            non-scannable frames, and an indicator for as long as it transmits.
+
+            Off removes the code rather than hiding the button.
+
+endmenu
+
+    config TOOLBOX_SCREENSHOT_SERVER
+        bool "Serve the screen over HTTP for diagnostics"
+        default n
+        help
+            Starts a small HTTP server on the board's Wi-Fi address that serves
+            the current framebuffer as a BMP. A bench aid for a development
+            build: it exposes the screen to anyone on the network with no
+            authentication, so it is OFF by default.

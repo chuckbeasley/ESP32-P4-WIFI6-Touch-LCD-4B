@@ -1,0 +1,4 @@
+version: 0.1.0
+description: Wi-Fi Toolbox and BLE Toolbox phone apps (ToolboxApp + BleToolboxApp)
+targets:
+- esp32p4
