@@ -453,6 +453,17 @@ extern "C" void app_main(void)
         return true;
     });
 
+    /* Set up LVGL's default focus group early so every click-focusable widget
+     * (buttons, text areas, ...) is collected into one group. The BLE keyboard's
+     * keypad input device drives this group, so it can navigate and type across
+     * apps instead of only inside the BLE Toolbox. */
+    {
+        LvLockGuard gui_guard;
+        if (lv_group_get_default() == nullptr) {
+            lv_group_set_default(lv_group_create());
+        }
+    }
+
     BootLoadingUi boot_loading;
     ESP_LOGI(ESP_UTILS_LOG_TAG, "Startup stage begin: Preparing display... (8%%)");
     {

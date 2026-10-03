@@ -268,6 +268,75 @@ inline const lv_image_dsc_t *toolbox_icon_paint(toolbox_icon_state_t *state,
     return &state->dsc;
 }
 
+/* Paints only the glyph — white on a transparent background, no rounded-square body —
+ * so the caller can recolour it for a status-bar icon (grey/blue/green). Same shape and
+ * placement as the launcher glyph, so it reads as the same Bluetooth rune. */
+inline const lv_image_dsc_t *toolbox_icon_paint_glyph(toolbox_icon_state_t *state,
+                                                       toolbox_glyph_fn glyph, void *ctx,
+                                                       const char *tag)
+{
+    if (state->pixels != NULL) {
+        return &state->dsc;
+    }
+
+    const uint8_t px_bytes = TOOLBOX_ICON_PX_BYTES;
+    const size_t bytes = (size_t)TOOLBOX_ICON_DIM * TOOLBOX_ICON_DIM * px_bytes;
+
+    state->pixels = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (state->pixels == NULL) {
+        state->pixels = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    }
+    if (state->pixels == NULL) {
+        ESP_LOGE(tag, "status glyph: no memory for %dx%d pixels",
+                 TOOLBOX_ICON_DIM, TOOLBOX_ICON_DIM);
+        return NULL;
+    }
+
+    const unsigned samples = TOOLBOX_ICON_SS * TOOLBOX_ICON_SS;
+
+    for (int py = 0; py < TOOLBOX_ICON_DIM; py++) {
+        for (int px = 0; px < TOOLBOX_ICON_DIM; px++) {
+            uint8_t *out = state->pixels + (((size_t)py * TOOLBOX_ICON_DIM) + px) * px_bytes;
+
+            unsigned hits = 0;
+            for (int sy = 0; sy < TOOLBOX_ICON_SS; sy++) {
+                for (int sx = 0; sx < TOOLBOX_ICON_SS; sx++) {
+                    const float fx = px + ((sx + 0.5f) / TOOLBOX_ICON_SS);
+                    const float fy = py + ((sy + 0.5f) / TOOLBOX_ICON_SS);
+
+                    if (glyph != NULL && glyph(fx, fy, ctx)) {
+                        hits++;
+                    }
+                }
+            }
+
+            if (hits == 0) {
+                memset(out, 0, px_bytes);
+                continue;
+            }
+
+            const uint8_t alpha = (uint8_t)((hits * 255u) / samples);
+            out[0] = 0xFF;   /* B */
+            out[1] = 0xFF;   /* G */
+            out[2] = 0xFF;   /* R */
+            out[3] = alpha;  /* A */
+        }
+    }
+
+    state->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    state->dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    state->dsc.header.w = TOOLBOX_ICON_DIM;
+    state->dsc.header.h = TOOLBOX_ICON_DIM;
+    state->dsc.header.stride = TOOLBOX_ICON_DIM * TOOLBOX_ICON_PX_BYTES;
+    state->dsc.data_size = (uint32_t)bytes;
+    state->dsc.data = state->pixels;
+
+    ESP_LOGI(tag, "status glyph painted: %dx%d, %u bytes",
+             TOOLBOX_ICON_DIM, TOOLBOX_ICON_DIM, (unsigned)bytes);
+
+    return &state->dsc;
+}
+
 /* ---- The Wi-Fi glyph ----------------------------------------------------- */
 
 typedef struct {

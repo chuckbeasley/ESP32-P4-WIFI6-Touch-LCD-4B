@@ -55,16 +55,15 @@ static void tb_connect_task(void *arg)
  * in the UI like a wired keyboard would. The key state is written on NimBLE's task
  * and read on the LVGL input timer; a single uint32_t + bool is safe enough here. */
 
-static uint32_t g_lv_key = 0;           /* LV_KEY_* of the currently held key */
+static uint32_t g_lv_key = 0;           /* LV_KEY_* or ASCII char of the currently held key */
 static bool g_lv_key_pressed = false;
 static lv_indev_t *g_lv_keypad_indev = nullptr;
-static lv_group_t *g_lv_group = nullptr; /* focus group driven by the BLE keyboard */
 
 static uint32_t tb_hid_to_lv_key(uint8_t hid)
 {
     switch (hid) {
-    case 0x52: return LV_KEY_UP;         /* keyboard up arrow */
-    case 0x51: return LV_KEY_DOWN;       /* keyboard down arrow */
+    case 0x52: return LV_KEY_PREV;       /* keyboard up arrow: previous item */
+    case 0x51: return LV_KEY_NEXT;       /* keyboard down arrow: next item */
     case 0x50: return LV_KEY_LEFT;       /* keyboard left arrow */
     case 0x4F: return LV_KEY_RIGHT;      /* keyboard right arrow */
     case 0x28: return LV_KEY_ENTER;
@@ -75,9 +74,105 @@ static uint32_t tb_hid_to_lv_key(uint8_t hid)
     }
 }
 
+/* Left Shift (bit 1) or Right Shift (bit 5) of the HID modifier byte. */
+static bool tb_hid_shift_pressed(uint8_t mods)
+{
+    return (mods & 0x22) != 0;
+}
+
+/* A HID keyboard usage ID as a printable ASCII character, honouring Shift.
+ * Returns 0 for keys that are not printable (arrows, modifiers, F-keys, ...). */
+static char tb_hid_to_ascii(uint8_t hid, bool shift)
+{
+    if (hid >= 0x04 && hid <= 0x1D) {   /* a..z */
+        const char c = (char)('a' + (hid - 0x04));
+        return shift ? (char)(c - 'a' + 'A') : c;
+    }
+    if (hid >= 0x1E && hid <= 0x27) {   /* 1..9, 0 */
+        static const char *plain = "1234567890";
+        static const char *shifted = "!@#$%^&*()";
+        const char c = plain[hid - 0x1E];
+        return shift ? shifted[hid - 0x1E] : c;
+    }
+    if (hid == 0x2C) {                  /* Space */
+        return ' ';
+    }
+    switch (hid) {
+    case 0x2D: return shift ? '_' : '-';
+    case 0x2E: return shift ? '+' : '=';
+    case 0x2F: return shift ? '{' : '[';
+    case 0x30: return shift ? '}' : ']';
+    case 0x31: return shift ? '|' : '\\';
+    case 0x32: return shift ? '~' : '#';
+    case 0x33: return shift ? ':' : ';';
+    case 0x34: return shift ? '"' : '\'';
+    case 0x35: return shift ? '~' : '`';
+    case 0x36: return shift ? '<' : ',';
+    case 0x37: return shift ? '>' : '.';
+    case 0x38: return shift ? '?' : '/';
+    default: return 0;
+    }
+}
+
+/* Type a printable character directly into a focused button matrix by selecting
+ * the button whose label matches it (case-insensitive for letters). This is how
+ * a BLE keyboard drives calculator-style keypads, which only respond to button
+ * presses and do not handle character key events. Returns true when consumed. */
+static bool tb_buttonmatrix_type_char(lv_obj_t *bm, char ch)
+{
+    for (uint32_t i = 0; ; i++) {
+        const char *txt = lv_buttonmatrix_get_button_text(bm, i);
+        if (txt == nullptr) {
+            break;   /* ran past the last button */
+        }
+        if (txt[0] == '\0' || txt[1] != '\0') {
+            continue;   /* skip the terminator and multi-byte labels (e.g. symbols) */
+        }
+        char label = txt[0];
+        if (label >= 'A' && label <= 'Z') {
+            label = (char)(label - 'A' + 'a');
+        }
+        char key = ch;
+        if (key >= 'A' && key <= 'Z') {
+            key = (char)(key - 'A' + 'a');
+        }
+        if (label == key) {
+            lv_buttonmatrix_set_selected_button(bm, i);
+            uint32_t id = i;
+            lv_obj_send_event(bm, LV_EVENT_VALUE_CHANGED, &id);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void tb_keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
+
+    if (g_lv_key_pressed) {
+        lv_group_t *group = lv_group_get_default();
+        if (group != nullptr) {
+            /* A freshly opened app has nothing focused, which would drop the key.
+             * Focus the first focusable widget so the key has a target — except for
+             * NEXT/PREV, which the keypad indev itself maps to focus-first/last. */
+            if (lv_group_get_focused(group) == nullptr &&
+                g_lv_key != LV_KEY_NEXT && g_lv_key != LV_KEY_PREV) {
+                lv_group_focus_next(group);
+            }
+
+            /* If the key is a printable character and the focused widget is a
+             * button matrix, feed it straight to the matching button. */
+            lv_obj_t *focused = lv_group_get_focused(group);
+            if (focused != nullptr && g_lv_key >= 32 && g_lv_key < 127 &&
+                lv_obj_has_class(focused, &lv_buttonmatrix_class) &&
+                tb_buttonmatrix_type_char(focused, (char)g_lv_key)) {
+                g_lv_key = 0;
+                g_lv_key_pressed = false;
+            }
+        }
+    }
+
     data->key = g_lv_key;
     data->state = g_lv_key_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     data->continue_reading = false;   /* one key state per read; never loop */
@@ -85,20 +180,24 @@ static void tb_keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
 
 static void tb_group_add(lv_obj_t *obj)
 {
-    if (obj != nullptr && g_lv_group != nullptr) {
-        lv_group_add_obj(g_lv_group, obj);
-        /* A visible focus ring, so the keyboard's current selection is obvious. */
-        static lv_style_t focus_style;
-        static bool focus_style_init = false;
-        if (!focus_style_init) {
-            lv_style_init(&focus_style);
-            lv_style_set_outline_width(&focus_style, 3);
-            lv_style_set_outline_color(&focus_style, lv_palette_main(LV_PALETTE_BLUE));
-            lv_style_set_outline_pad(&focus_style, 3);
-            focus_style_init = true;
-        }
-        lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUSED);
+    if (obj == nullptr) {
+        return;
     }
+    lv_group_t *group = lv_group_get_default();
+    if (group != nullptr) {
+        lv_group_add_obj(group, obj);
+    }
+    /* A visible focus ring, so the keyboard's current selection is obvious. */
+    static lv_style_t focus_style;
+    static bool focus_style_init = false;
+    if (!focus_style_init) {
+        lv_style_init(&focus_style);
+        lv_style_set_outline_width(&focus_style, 3);
+        lv_style_set_outline_color(&focus_style, lv_palette_main(LV_PALETTE_BLUE));
+        lv_style_set_outline_pad(&focus_style, 3);
+        focus_style_init = true;
+    }
+    lv_obj_add_style(obj, &focus_style, LV_STATE_FOCUSED);
 }
 
 /* Launcher icon: the Bluetooth rune on the same blue the Wi-Fi toolbox uses, so the pair
@@ -119,6 +218,7 @@ static const toolbox_pt_t k_bt_points[] = {
 };
 
 static toolbox_icon_state_t s_icon_state;
+static toolbox_icon_state_t s_status_icon_state;
 static const toolbox_bt_glyph_t k_bt_glyph = {
     .pts = k_bt_points,
     .count = (int)(sizeof(k_bt_points) / sizeof(k_bt_points[0])),
@@ -129,6 +229,34 @@ static const lv_image_dsc_t *ble_launcher_icon(void)
 {
     return toolbox_icon_paint(&s_icon_state, 0x49, 0x8B, 0xE8,
                               toolbox_icon_is_bluetooth, (void *)&k_bt_glyph, TAG);
+}
+
+/* The status-bar rune is the glyph alone — white on transparent — so it can be
+ * recoloured per state instead of turning the whole rounded-square body into a blob. */
+static const lv_image_dsc_t *ble_status_icon(void)
+{
+    return toolbox_icon_paint_glyph(&s_status_icon_state, toolbox_icon_is_bluetooth,
+                                    (void *)&k_bt_glyph, TAG);
+}
+
+/* Status-bar icon config: three states built from the same painted Bluetooth
+ * rune — grey = BLE off, blue = BLE active but idle, green = device connected. */
+static esp_brookesia::systems::phone::App::Config ble_phone_app_config(void)
+{
+    using namespace esp_brookesia::systems::phone;
+    using namespace esp_brookesia::gui;
+
+    App::Config cfg = {};
+    cfg.status_icon_area_index = 1;   /* END area, next to the Wi-Fi icon */
+    cfg.status_icon_data.icon.image_num = 3;
+    cfg.status_icon_data.icon.images[0] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x808080);  /* inactive */
+    cfg.status_icon_data.icon.images[1] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x498BE8);  /* active */
+    cfg.status_icon_data.icon.images[2] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x00C853);  /* connected */
+    cfg.status_bar_visual_mode = StatusBar::VisualMode::SHOW_FIXED;
+    cfg.navigation_bar_visual_mode = NavigationBar::VisualMode::HIDE;
+    cfg.flags.enable_status_icon_common_size = 1;
+    cfg.flags.enable_navigation_gesture = 1;
+    return cfg;
 }
 
 /* The instance the event handler reads. See onEvent for why this exists rather than
@@ -159,7 +287,9 @@ static BleToolboxApp *g_app = nullptr;
 #define ACT_CONN_SUBSCRIBE  604
 
 BleToolboxApp::BleToolboxApp():
-    ESP_Brookesia_PhoneApp("BLE Toolbox", nullptr, true),
+    ESP_Brookesia_PhoneApp(
+        esp_brookesia::systems::base::App::Config::SIMPLE_CONSTRUCTOR("BLE Toolbox", nullptr, true),
+        ble_phone_app_config()),
     status_label(nullptr),
     scan_state_label(nullptr),
     scan_count_label(nullptr),
@@ -297,19 +427,15 @@ bool BleToolboxApp::run(void)
 
     lv_obj_clear_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE);
 
-    /* A keypad input device lets a connected BLE HID keyboard drive focus and selection.
-     * The key state is shared with the notification handler above. */
+    /* A keypad input device lets a connected BLE HID keyboard drive focus, selection,
+     * and text input. It is bound to LVGL's default group (created once in main), so
+     * the keyboard works across apps rather than only inside this one. */
     if (g_lv_keypad_indev == nullptr) {
         g_lv_keypad_indev = lv_indev_create();
         lv_indev_set_type(g_lv_keypad_indev, LV_INDEV_TYPE_KEYPAD);
         lv_indev_set_read_cb(g_lv_keypad_indev, tb_keypad_read);
         lv_indev_set_disp(g_lv_keypad_indev, lv_disp_get_default());
-    }
-    if (g_lv_group == nullptr) {
-        g_lv_group = lv_group_create();
-    }
-    if (g_lv_keypad_indev != nullptr && g_lv_group != nullptr) {
-        lv_indev_set_group(g_lv_keypad_indev, g_lv_group);
+        lv_indev_set_group(g_lv_keypad_indev, lv_group_get_default());
     }
 
     static TaskHandle_t connect_task = nullptr;
@@ -784,17 +910,21 @@ void BleToolboxApp::latchNotify(uint16_t attr_handle, const uint8_t *data, uint1
 
     *p = '\0';
 
-    /* Route the first pressed key into the LVGL keypad input device, so a keyboard
-     * drives focus and selection like a wired one. */
-    if (len >= 3) {
-        const uint32_t lv = tb_hid_to_lv_key(data[2]);
-        g_lv_key = lv;
-        g_lv_key_pressed = (lv != 0);
-        if (lv != 0) {
-            ESP_LOGW(TAG, "key hid=0x%02x -> lv=0x%lx %s", data[2], (unsigned long)lv,
-                     g_lv_key_pressed ? "pressed" : "released");
+    /* Route the first pressed key into the LVGL keypad input device. Printable
+     * characters are delivered as ASCII so the focused text area (the LVGL
+     * virtual keyboard's target) receives them; the rest drive focus/selection. */
+    if (len >= 3 && data[2] != 0) {
+        const bool shift = tb_hid_shift_pressed(data[0]);
+        const char ch = tb_hid_to_ascii(data[2], shift);
+        if (ch != 0) {
+            g_lv_key = (uint32_t)(uint8_t)ch;
+            g_lv_key_pressed = true;
+        } else {
+            g_lv_key = tb_hid_to_lv_key(data[2]);
+            g_lv_key_pressed = (g_lv_key != 0);
         }
     } else {
+        g_lv_key = 0;
         g_lv_key_pressed = false;
     }
 
@@ -1174,6 +1304,19 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
     }
 
     app->updateStatus();
+
+    /* Keep the status-bar BLE icon in step with the connection state: grey when
+     * the service is down, blue when it is up but idle, green while connected.
+     * setIconState() is a no-op when the state is unchanged. */
+    {
+        int state = 0;
+        if (app->conn_state == BLE_TOOLBOX_CONN_CONNECTED) {
+            state = 2;
+        } else if (app->service_up) {
+            state = 1;
+        }
+        (void)app->setStatusIconState(state);
+    }
 
     if (g_show_connect) {
         g_show_connect = false;
