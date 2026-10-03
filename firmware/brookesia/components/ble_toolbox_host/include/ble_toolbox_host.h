@@ -112,6 +112,10 @@ typedef struct {
      * valid only for this call. */
     void (*on_conn_notify)(uint16_t attr_handle, const uint8_t *data, uint16_t len,
                            bool indication, void *user);
+    /* A pairing code is required to complete the connection. `action` is one of the
+     * BLE_SM_IOACT_* constants (INPUT to enter the peer's code, NUMCMP to confirm a
+     * number, DISP to show ours); `numcmp` carries the number for NUMCMP. */
+    void (*on_passkey)(uint16_t conn_handle, uint8_t action, uint32_t numcmp, void *user);
 } ble_toolbox_host_callbacks_t;
 
 /* Bring the NimBLE host up against the co-processor's controller, and bind the given
@@ -207,6 +211,19 @@ esp_err_t ble_toolbox_host_subscribe(uint16_t val_handle, bool want_indication);
 
 /* The current connection state. */
 ble_toolbox_conn_state_t ble_toolbox_host_conn_state(void);
+
+/* Passkey/pairing action codes, mirroring NimBLE's BLE_SM_IOACT_* values so callers do
+ * not need to include NimBLE headers to interpret the on_passkey callback. */
+enum {
+    BLE_TOOLBOX_IOACT_INPUT  = 2,   /* enter the peer's passkey */
+    BLE_TOOLBOX_IOACT_DISP   = 3,   /* display our passkey */
+    BLE_TOOLBOX_IOACT_NUMCMP = 4,   /* confirm a number */
+};
+
+/* Answer a pending pairing-code request. For BLE_SM_IOACT_INPUT, `passkey` is the
+ * six-digit code the user entered; for NUMCMP and DISP, `accept` says whether to
+ * proceed. Returns ESP_ERR_INVALID_STATE when no request is pending. */
+esp_err_t ble_toolbox_host_passkey_reply(uint32_t passkey, bool accept);
 
 /* ---- Decoding -------------------------------------------------------------
  *

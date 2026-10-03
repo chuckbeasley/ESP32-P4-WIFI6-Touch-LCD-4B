@@ -114,6 +114,10 @@ private:
     static void onConnRead(uint16_t val_handle, const uint8_t *data, uint16_t len, void *user);
     static void onConnNotify(uint16_t attr_handle, const uint8_t *data, uint16_t len,
                              bool indication, void *user);
+    static void onPasskey(uint16_t conn_handle, uint8_t action, uint32_t numcmp, void *user);
+    void showPasskey(void);
+    void closePasskey(void);
+    static void onPasskeyEvent(lv_event_t *e);
 
     void latchAdv(const ble_toolbox_adv_t *adv);
     void latchRaw(const ble_toolbox_raw_adv_t *adv);
@@ -230,11 +234,20 @@ private:
     uint16_t conn_svc_end;
     volatile ble_toolbox_conn_state_t conn_state;
     volatile int conn_fail_status;       /* BLE status of the last failed connect (0 = none) */
+    uint8_t conn_addr[6];                /* address of the connected peer (for the Scan toggle) */
+    bool conn_random;                    /* its address type */
     char conn_read_buf[96];
     volatile uint16_t conn_read_len;
     volatile uint16_t conn_read_handle;
     char conn_notify_buf[96];            /* latest notification/indication, hex + key */
     volatile uint16_t conn_notify_handle;
+
+    /* Pairing-code request. Latched on NimBLE's task, drained on the timer. */
+    volatile bool passkey_pending;
+    uint8_t passkey_action;        /* BLE_SM_IOACT_* */
+    uint32_t passkey_numcmp;       /* the number for NUMCMP/DISP */
+    lv_obj_t *passkey_modal;       /* modal on lv_layer_top(); nullptr when hidden */
+    lv_obj_t *passkey_value;       /* textarea (INPUT) or label (NUMCMP/DISP) */
 
     /* Set by the callbacks, cleared by the timer. */
     volatile bool list_dirty;

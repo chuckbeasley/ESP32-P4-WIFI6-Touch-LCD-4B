@@ -439,3 +439,31 @@ inline bool toolbox_icon_is_bluetooth(float x, float y, void *ctx)
 
     return false;
 }
+
+/* The Bluetooth rune with the two flanking dots of a "connected" indicator: a dot
+ * on each side of the rune's waist, the conventional way a connected link is drawn. */
+typedef struct {
+    const toolbox_bt_glyph_t *rune;   /* the base rune */
+    float dot_x[2];                   /* x centres of the two dots */
+    float dot_y;                      /* shared y centre */
+    float dot_r;                      /* dot radius */
+} toolbox_bt_connected_glyph_t;
+
+inline bool toolbox_icon_is_bluetooth_connected(float x, float y, void *ctx)
+{
+    const toolbox_bt_connected_glyph_t *g = (const toolbox_bt_connected_glyph_t *)ctx;
+
+    if (toolbox_icon_is_bluetooth(x, y, (void *)g->rune)) {
+        return true;
+    }
+
+    for (int i = 0; i < 2; i++) {
+        const float dx = x - g->dot_x[i];
+        const float dy = y - g->dot_y;
+        if ((dx * dx) + (dy * dy) <= (g->dot_r * g->dot_r)) {
+            return true;
+        }
+    }
+
+    return false;
+}

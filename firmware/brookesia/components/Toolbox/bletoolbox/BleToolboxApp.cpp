@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,7 +31,6 @@ static const char *TAG = "BleToolbox";
 static uint8_t        g_pending_addr[6];
 static bool           g_pending_random;
 static volatile bool  g_pending_connect;
-static volatile bool  g_show_connect;
 static int            g_conn_retries;
 
 static void tb_connect_task(void *arg)
@@ -239,8 +239,24 @@ static const lv_image_dsc_t *ble_status_icon(void)
                                     (void *)&k_bt_glyph, TAG);
 }
 
-/* Status-bar icon config: three states built from the same painted Bluetooth
- * rune — grey = BLE off, blue = BLE active but idle, green = device connected. */
+/* The connected state is the rune plus a dot on each side, the conventional
+ * "connected" indicator. */
+static toolbox_icon_state_t s_connected_icon_state;
+static const toolbox_bt_connected_glyph_t k_bt_connected_glyph = {
+    .rune = &k_bt_glyph,
+    .dot_x = { 24.0f, 88.0f },
+    .dot_y = 56.0f,
+    .dot_r = 4.5f,
+};
+
+static const lv_image_dsc_t *ble_connected_icon(void)
+{
+    return toolbox_icon_paint_glyph(&s_connected_icon_state, toolbox_icon_is_bluetooth_connected,
+                                    (void *)&k_bt_connected_glyph, TAG);
+}
+
+/* Status-bar icon config: three states — grey = BLE off, blue = BLE active but idle,
+ * green with flanking dots = device connected. */
 static esp_brookesia::systems::phone::App::Config ble_phone_app_config(void)
 {
     using namespace esp_brookesia::systems::phone;
@@ -249,9 +265,9 @@ static esp_brookesia::systems::phone::App::Config ble_phone_app_config(void)
     App::Config cfg = {};
     cfg.status_icon_area_index = 1;   /* END area, next to the Wi-Fi icon */
     cfg.status_icon_data.icon.image_num = 3;
-    cfg.status_icon_data.icon.images[0] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x808080);  /* inactive */
-    cfg.status_icon_data.icon.images[1] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x498BE8);  /* active */
-    cfg.status_icon_data.icon.images[2] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x00C853);  /* connected */
+    cfg.status_icon_data.icon.images[0] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x808080);    /* inactive */
+    cfg.status_icon_data.icon.images[1] = StyleImage::IMAGE_RECOLOR(ble_status_icon(), 0x498BE8);    /* active */
+    cfg.status_icon_data.icon.images[2] = StyleImage::IMAGE_RECOLOR(ble_connected_icon(), 0x00C853); /* connected */
     cfg.status_bar_visual_mode = StatusBar::VisualMode::SHOW_FIXED;
     cfg.navigation_bar_visual_mode = NavigationBar::VisualMode::HIDE;
     cfg.flags.enable_status_icon_common_size = 1;
@@ -337,9 +353,16 @@ BleToolboxApp::BleToolboxApp():
     conn_svc_end(0),
     conn_state(BLE_TOOLBOX_CONN_DISCONNECTED),
     conn_fail_status(0),
+    conn_addr{0},
+    conn_random(false),
     conn_read_len(0),
     conn_read_handle(0),
     conn_notify_handle(0),
+    passkey_pending(false),
+    passkey_action(0),
+    passkey_numcmp(0),
+    passkey_modal(nullptr),
+    passkey_value(nullptr),
     list_dirty(false),
     auto_discover_chars(false),
     auto_subscribe(false)
@@ -484,6 +507,10 @@ bool BleToolboxApp::close(void)
     }
 #endif
 
+    /* The passkey modal lives on lv_layer_top(), like the spam dialog, so it must be
+     * deleted explicitly when the app closes. */
+    closePasskey();
+
     if (ui_timer != nullptr) {
         lv_timer_del(ui_timer);
         ui_timer = nullptr;
@@ -546,6 +573,7 @@ bool BleToolboxApp::ensureService(void)
     cbs.on_conn_chr = onConnChr;
     cbs.on_conn_read = onConnRead;
     cbs.on_conn_notify = onConnNotify;
+    cbs.on_passkey = onPasskey;
 
     const esp_err_t err = ble_toolbox_host_init(&cbs, this);
     if (err != ESP_OK) {
@@ -711,11 +739,15 @@ void BleToolboxApp::onConnState(ble_toolbox_conn_state_t state, esp_err_t reason
     }
 
     if (state == BLE_TOOLBOX_CONN_CONNECTED) {
+        /* Remember who connected, so the Scan list can flip that row's button to
+         * "Disconnect". */
+        memcpy(app->conn_addr, g_pending_addr, 6);
+        app->conn_random = g_pending_random;
+
         /* A fresh connection begins at the service level, auto-discovered. */
         app->conn_nav = 0;
         app->svc_latch_len = 0;
         app->chr_latch_len = 0;
-        g_show_connect = true;   /* switch to the connect screen on the next tick */
         (void)ble_toolbox_host_discover_services();
     }
     app->list_dirty = true;
@@ -808,6 +840,19 @@ void BleToolboxApp::onConnNotify(uint16_t attr_handle, const uint8_t *data, uint
     if (app != nullptr) {
         app->latchNotify(attr_handle, data, len, indication);
     }
+}
+
+void BleToolboxApp::onPasskey(uint16_t conn_handle, uint8_t action, uint32_t numcmp, void *user)
+{
+    (void)conn_handle;
+    BleToolboxApp *app = (BleToolboxApp *)user;
+    if (app == nullptr) {
+        return;
+    }
+
+    app->passkey_action = action;
+    app->passkey_numcmp = numcmp;
+    app->passkey_pending = true;
 }
 
 /* A HID keyboard usage ID as a printable name; empty for "no key". */
@@ -955,6 +1000,13 @@ void BleToolboxApp::updateStatus(void)
              scanning ? "scanning" : "idle",
              (unsigned long)scan_total);
     lv_label_set_text(status_label, text);
+
+    /* The Scan screen's state line doubles as the connection readout. connectTo()
+     * sets it to "connecting...", so once the connection lands it must flip to
+     * "connected" (matching the status-bar icon). */
+    if (scan_state_label != nullptr && conn_state == BLE_TOOLBOX_CONN_CONNECTED) {
+        lv_label_set_text(scan_state_label, "connected");
+    }
 }
 
 void BleToolboxApp::refreshScan(void)
@@ -979,7 +1031,7 @@ void BleToolboxApp::refreshScan(void)
 
         lv_obj_t *row = lv_obj_create(scan_list);
         lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, 52);
+        lv_obj_set_height(row, 64);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *name = lv_label_create(row);
@@ -991,12 +1043,17 @@ void BleToolboxApp::refreshScan(void)
         lv_label_set_text(addr, a->addr_str);
         lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
 
-        /* The Connect button is the action; the row itself is not clickable. */
+        /* The Connect button is the action; the row itself is not clickable. It
+         * doubles as Disconnect once this device is the connected one. */
+        const bool is_connected = (conn_state == BLE_TOOLBOX_CONN_CONNECTED &&
+                                   memcmp(conn_addr, a->addr, 6) == 0 &&
+                                   conn_random == a->random_addr);
+
         lv_obj_t *btn = lv_btn_create(row);
-        lv_obj_set_size(btn, 84, 36);
+        lv_obj_set_size(btn, 96, 44);
         lv_obj_align(btn, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_t *btn_label = lv_label_create(btn);
-        lv_label_set_text(btn_label, "Connect");
+        lv_label_set_text(btn_label, is_connected ? "Disconnect" : "Connect");
         lv_obj_center(btn_label);
         lv_obj_add_event_cb(btn, onScanRowClick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         tb_group_add(btn);
@@ -1015,12 +1072,21 @@ void BleToolboxApp::onScanRowClick(lv_event_t *e)
 {
     const int slot = (int)(intptr_t)lv_event_get_user_data(e);
     BleToolboxApp *app = g_app;
-    ESP_LOGW(TAG, "scan row click slot=%d len=%d", slot,
-             app != nullptr ? (int)app->scan_latch_len : -1);
     if (app == nullptr || slot < 0 || slot >= app->scan_latch_len) {
         return;
     }
-    app->connectTo(&app->scan_latch[slot].adv);
+
+    const ble_toolbox_adv_t *adv = &app->scan_latch[slot].adv;
+
+    /* Tapping the connected device's button disconnects it. */
+    if (app->conn_state == BLE_TOOLBOX_CONN_CONNECTED &&
+        memcmp(app->conn_addr, adv->addr, 6) == 0 &&
+        app->conn_random == adv->random_addr) {
+        (void)ble_toolbox_host_disconnect();
+        return;
+    }
+
+    app->connectTo(adv);
 }
 
 void BleToolboxApp::connectTo(const ble_toolbox_adv_t *adv)
@@ -1052,7 +1118,6 @@ void BleToolboxApp::connectTo(const ble_toolbox_adv_t *adv)
 
     conn_state = BLE_TOOLBOX_CONN_CONNECTING;
     conn_fail_status = 0;
-    g_show_connect = false;
     g_conn_retries = 0;
     memcpy(g_pending_addr, adv->addr, 6);
     g_pending_random = adv->random_addr;
@@ -1318,10 +1383,11 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
         (void)app->setStatusIconState(state);
     }
 
-    if (g_show_connect) {
-        g_show_connect = false;
-        app->showScreen(BleToolboxApp::SCREEN_CONNECT);
-        app->refreshConnect();
+    /* A pairing-code request opens the passkey screen. A plain connection does not
+     * auto-open anything — it just connects and the status icon goes green. */
+    if (app->passkey_pending) {
+        app->passkey_pending = false;
+        app->showPasskey();
     }
 
     /* Auto-subscribe runs here, on the app's task, so the GATT client operations do not
@@ -1584,16 +1650,6 @@ void BleToolboxApp::buildConnect(void)
     conn_back_btn = toolbox_make_button(buttons, "Services", onEvent,
                                         (void *)(intptr_t)ACT_CONN_SERVICES, 44);
     lv_obj_set_flex_grow(conn_back_btn, 1);
-    {
-        lv_obj_t *write_btn = toolbox_make_button(buttons, "Write", onEvent,
-                                                  (void *)(intptr_t)ACT_CONN_WRITE, 44);
-        lv_obj_set_flex_grow(write_btn, 1);
-    }
-    {
-        lv_obj_t *sub_btn = toolbox_make_button(buttons, "Subscribe", onEvent,
-                                                (void *)(intptr_t)ACT_CONN_SUBSCRIBE, 44);
-        lv_obj_set_flex_grow(sub_btn, 1);
-    }
 
     /* The services / characteristics list, scrollable. */
     conn_list = lv_obj_create(panel);
@@ -1615,6 +1671,119 @@ void BleToolboxApp::buildConnect(void)
     lv_obj_set_style_bg_color(conn_value_label, lv_palette_main(LV_PALETTE_GREY), 0);
     lv_obj_set_style_pad_all(conn_value_label, 4, 0);
     lv_label_set_text(conn_value_label, "");
+}
+
+/* ---- Pairing-code modal --------------------------------------------------- */
+
+void BleToolboxApp::closePasskey(void)
+{
+    if (passkey_modal != nullptr) {
+        lv_obj_del(passkey_modal);
+        passkey_modal = nullptr;
+        passkey_value = nullptr;
+    }
+}
+
+void BleToolboxApp::showPasskey(void)
+{
+    closePasskey();
+
+    lv_obj_t *modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(modal, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(modal, lv_color_black(), 0);
+    lv_obj_align(modal, LV_ALIGN_CENTER, 0, 0);
+    passkey_modal = modal;
+
+    lv_obj_t *panel = lv_obj_create(modal);
+    lv_obj_set_width(panel, LV_PCT(88));
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_pad_all(panel, 16, 0);
+
+    if (passkey_action == BLE_TOOLBOX_IOACT_INPUT) {
+        lv_obj_t *title = lv_label_create(panel);
+        lv_label_set_text(title, "Enter pairing code");
+
+        lv_obj_t *ta = lv_textarea_create(panel);
+        lv_textarea_set_one_line(ta, true);
+        lv_textarea_set_max_length(ta, 6);
+        lv_obj_set_width(ta, LV_PCT(100));
+        passkey_value = ta;
+
+        lv_obj_t *kb = lv_keyboard_create(panel);
+        lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+        lv_keyboard_set_textarea(kb, ta);
+
+        lv_obj_t *row = lv_obj_create(panel);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 8, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *ok = toolbox_make_button(row, "Confirm", onPasskeyEvent, (void *)(intptr_t)1, 44);
+        lv_obj_set_flex_grow(ok, 1);
+        lv_obj_t *cancel = toolbox_make_button(row, "Cancel", onPasskeyEvent, (void *)(intptr_t)0, 44);
+        lv_obj_set_flex_grow(cancel, 1);
+    } else {
+        const bool numcmp = (passkey_action == BLE_TOOLBOX_IOACT_NUMCMP);
+
+        lv_obj_t *title = lv_label_create(panel);
+        lv_label_set_text(title, numcmp ? "Confirm pairing number"
+                                        : "Enter this code on the device");
+
+        lv_obj_t *num = lv_label_create(panel);
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%06lu", (unsigned long)passkey_numcmp);
+        lv_label_set_text(num, buf);
+        lv_obj_set_style_text_font(num, TOOLBOX_FONT_TITLE, 0);
+        lv_obj_set_style_text_align(num, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(num, LV_PCT(100));
+        passkey_value = num;
+
+        lv_obj_t *row = lv_obj_create(panel);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 8, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        if (numcmp) {
+            lv_obj_t *match = toolbox_make_button(row, "Match", onPasskeyEvent, (void *)(intptr_t)1, 44);
+            lv_obj_set_flex_grow(match, 1);
+            lv_obj_t *mismatch = toolbox_make_button(row, "Mismatch", onPasskeyEvent, (void *)(intptr_t)0, 44);
+            lv_obj_set_flex_grow(mismatch, 1);
+        } else {
+            lv_obj_t *done = toolbox_make_button(row, "Done", onPasskeyEvent, (void *)(intptr_t)1, 44);
+            lv_obj_set_flex_grow(done, 1);
+        }
+    }
+}
+
+void BleToolboxApp::onPasskeyEvent(lv_event_t *e)
+{
+    const int accept = (int)(intptr_t)lv_event_get_user_data(e);
+    BleToolboxApp *app = g_app;
+    if (app == nullptr) {
+        return;
+    }
+
+    if (accept) {
+        uint32_t passkey = 0;
+        if (app->passkey_action == BLE_TOOLBOX_IOACT_INPUT && app->passkey_value != nullptr) {
+            const char *txt = lv_textarea_get_text(app->passkey_value);
+            passkey = (uint32_t)strtoul(txt, nullptr, 10);
+        }
+        (void)ble_toolbox_host_passkey_reply(passkey, true);
+    } else {
+        if (app->passkey_action == BLE_TOOLBOX_IOACT_NUMCMP) {
+            (void)ble_toolbox_host_passkey_reply(0, false);
+        } else {
+            (void)ble_toolbox_host_disconnect();
+        }
+    }
+    app->closePasskey();
 }
 
 /* ---- Spam screen (compiled out without the transmit path) ---------------- */

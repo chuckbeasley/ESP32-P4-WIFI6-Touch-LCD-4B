@@ -24,6 +24,7 @@
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
+#include "host/ble_sm.h"
 #include "host/util/util.h"
 #include "store/config/ble_store_config.h"
 
@@ -75,6 +76,11 @@ typedef struct {
     /* Connection (GATT client). */
     uint16_t                         conn_handle;
     ble_toolbox_conn_state_t         conn_state;
+
+    /* Pending pairing-code request. */
+    uint16_t                         pend_conn_handle;
+    uint8_t                          pend_action;
+    bool                             pend_passkey;
 } tb_ble_state_t;
 
 static tb_ble_state_t s_ble;
@@ -261,6 +267,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         s_ble.conn_state = BLE_TOOLBOX_CONN_DISCONNECTED;
+        s_ble.pend_passkey = false;
         ESP_LOGI(TAG, "disconnected (reason %d)", event->disconnect.reason);
         if (s_ble.cbs.on_conn_state != NULL) {
             s_ble.cbs.on_conn_state(BLE_TOOLBOX_CONN_DISCONNECTED, ESP_OK, s_ble.user);
@@ -275,6 +282,19 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             os_mbuf_copydata(event->notify_rx.om, 0, n, buf);
             s_ble.cbs.on_conn_notify(event->notify_rx.attr_handle, buf, n,
                                      event->notify_rx.indication, s_ble.user);
+        }
+        break;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        s_ble.pend_conn_handle = event->passkey.conn_handle;
+        s_ble.pend_action = event->passkey.params.action;
+        s_ble.pend_passkey = true;
+        ESP_LOGI(TAG, "passkey action %u (numcmp %lu)",
+                 (unsigned)event->passkey.params.action,
+                 (unsigned long)event->passkey.params.numcmp);
+        if (s_ble.cbs.on_passkey != NULL) {
+            s_ble.cbs.on_passkey(event->passkey.conn_handle, event->passkey.params.action,
+                                 event->passkey.params.numcmp, s_ble.user);
         }
         break;
 
@@ -347,6 +367,11 @@ esp_err_t ble_toolbox_host_init(const ble_toolbox_host_callbacks_t *cbs, void *u
     ble_hs_cfg.sync_cb = tb_ble_on_sync;
     ble_hs_cfg.reset_cb = tb_ble_on_reset;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    /* Pairing: allow passkey entry and numeric comparison without forcing MITM, so
+     * "just works" devices (most keyboards) still pair with no code. */
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_KEYBOARD_DISPLAY;
+    ble_hs_cfg.sm_sc = 1;
 
     err = nimble_port_init();
     if (err != ESP_OK) {
@@ -1035,6 +1060,35 @@ esp_err_t ble_toolbox_host_subscribe(uint16_t val_handle, bool want_indication)
 ble_toolbox_conn_state_t ble_toolbox_host_conn_state(void)
 {
     return s_ble.conn_state;
+}
+
+esp_err_t ble_toolbox_host_passkey_reply(uint32_t passkey, bool accept)
+{
+    if (!s_ble.pend_passkey) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    struct ble_sm_io pkey = { 0 };
+    pkey.action = s_ble.pend_action;
+
+    if (s_ble.pend_action == BLE_SM_IOACT_NUMCMP) {
+        pkey.numcmp_accept = accept ? 1 : 0;
+    } else {
+        pkey.passkey = passkey;
+    }
+
+    const uint16_t conn_handle = s_ble.pend_conn_handle;
+    s_ble.pend_passkey = false;
+
+    const int rc = ble_sm_inject_io(conn_handle, &pkey);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "passkey inject failed: %d", rc);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "passkey answered (action %u, passkey %lu)",
+             (unsigned)s_ble.pend_action, (unsigned long)passkey);
+    return ESP_OK;
 }
 
 
