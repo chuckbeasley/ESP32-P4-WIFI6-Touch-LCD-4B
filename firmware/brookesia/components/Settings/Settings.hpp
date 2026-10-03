@@ -12,6 +12,7 @@
 #include "./ui/AboutPage.hpp"
 #include "./ui/DisplayPage.hpp"
 #include "./ui/SoundPage.hpp"
+#include "./ui/TimeZonePage.hpp"
 #include "./ui/WlanPage.hpp"
 
 namespace esp_brookesia::apps
@@ -50,6 +51,7 @@ namespace esp_brookesia::apps
             Wlan,
             Sound,
             Display,
+            TimeZone,
             About,
         };
 

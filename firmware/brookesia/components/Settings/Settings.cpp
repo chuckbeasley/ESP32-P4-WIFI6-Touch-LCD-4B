@@ -39,10 +39,11 @@ namespace esp_brookesia::apps
     static void time_sync_notification_cb(struct timeval *tv)
     {
         (void)tv;
-        setenv("TZ", "CST-8", 1);
-        tzset();
+        const int index = timezone_load();
+        timezone_apply(index);
         s_time_synced = true;
-        ESP_UTILS_LOGI("SNTP time synced, timezone CST-8 applied");
+        ESP_UTILS_LOGI("SNTP time synced, timezone %s (%s) applied",
+                       timezone_label(index), timezone_tz(index));
     }
 
     static void start_time_sync_once()
@@ -110,6 +111,9 @@ namespace esp_brookesia::apps
         settings_ui::add_section(list1, "Media", style_list_text);
         add_button_with_arrow(&sound, "Sound");
         add_button_with_arrow(&backlights, "Display");
+
+        settings_ui::add_section(list1, "Date & Time", style_list_text);
+        add_button_with_arrow(nullptr, "Time Zone");
 
         settings_ui::add_section(list1, "More", style_list_text);
         add_button_with_arrow(&info, "About");
@@ -179,6 +183,10 @@ namespace esp_brookesia::apps
         {
             lv_async_call(open_page_async_cb, (void *)"Display");
         }
+        else if (strcmp(txt, "Time Zone") == 0)
+        {
+            lv_async_call(open_page_async_cb, (void *)"Time Zone");
+        }
         else if (strcmp(txt, "About") == 0)
         {
             lv_async_call(open_page_async_cb, (void *)"About");
@@ -204,6 +212,11 @@ namespace esp_brookesia::apps
             active_page = ActivePage::Display;
             DisplayPage::requestInstance(false, false)->run();
         }
+        else if (strcmp(page_name, "Time Zone") == 0)
+        {
+            active_page = ActivePage::TimeZone;
+            TimeZonePage::requestInstance(false, false)->run();
+        }
         else if (strcmp(page_name, "About") == 0)
         {
             active_page = ActivePage::About;
@@ -223,6 +236,9 @@ namespace esp_brookesia::apps
             break;
         case ActivePage::Display:
             DisplayPage::requestInstance(false, false)->close();
+            break;
+        case ActivePage::TimeZone:
+            TimeZonePage::requestInstance(false, false)->close();
             break;
         case ActivePage::About:
             AboutPage::requestInstance(false, false)->close();
@@ -305,6 +321,9 @@ namespace esp_brookesia::apps
     bool Settings::init()
     {
         ESP_UTILS_LOGD("Init");
+        // Apply the persisted time zone as early as possible so localtime() is
+        // correct even before the first NTP sync lands.
+        timezone_apply(timezone_load());
         initWifi();
         return true;
     }
