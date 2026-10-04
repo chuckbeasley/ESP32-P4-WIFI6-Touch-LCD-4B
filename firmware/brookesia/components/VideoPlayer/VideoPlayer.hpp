@@ -23,6 +23,10 @@ namespace esp_brookesia::apps
         static VideoPlayer *requestInstance(bool use_status_bar = false, bool use_navigation_bar = false);
         ~VideoPlayer();
 
+        /* File-picker callbacks; public because the picker takes plain function pointers. */
+        static void onFilePicked(const char *path, void *user);
+        static void onFilePickCancelled(const char *path, void *user);
+
     protected:
         VideoPlayer(bool use_status_bar, bool use_navigation_bar);
         bool run(void) override;
@@ -71,6 +75,7 @@ namespace esp_brookesia::apps
         bool startPlaybackTask();
         bool stopPlaybackTask(TickType_t timeout);
         esp_err_t getAviFileList(const char *dir_path);
+        bool setPlaylistToFile(const char *path);
         esp_err_t initDisplayBypass();
         void deinitDisplayBypass();
         esp_err_t initJpegDecoder();

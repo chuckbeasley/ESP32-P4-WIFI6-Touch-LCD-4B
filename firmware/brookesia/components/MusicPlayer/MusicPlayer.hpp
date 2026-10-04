@@ -30,6 +30,13 @@ public:
      */
     ~MusicPlayer();
 
+    /**
+     * @brief File-picker callbacks; public because the picker takes plain function
+     *        pointers, not members.
+     */
+    static void onFilePicked(const char *path, void *user);
+    static void onFilePickCancelled(const char *path, void *user);
+
 protected:
     /**
      * @brief Construct a new MusicPlayer object (private to enforce singleton)

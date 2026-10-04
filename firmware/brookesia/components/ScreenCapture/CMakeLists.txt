@@ -12,4 +12,8 @@ idf_component_register(
         esp_timer
         fatfs
         esp32_p4_wifi6_touch_lcd_4b
+        # Header-only icon painter shared with the toolbox apps (toolbox_icons.hpp).
+        Toolbox
+        # Shared file browser for the captures list.
+        FilePicker
 )

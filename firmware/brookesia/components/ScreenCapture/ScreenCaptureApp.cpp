@@ -8,16 +8,140 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <algorithm>
-#include <cctype>
 
 #include "esp_log.h"
 #include "screen_capture.h"
+#include "toolbox_icons.hpp"
+#include "FilePicker.hpp"
 
 static const char *TAG = "ScreenCapture";
 
 enum { ACT_SHOT = 1, ACT_REC = 2, ACT_VIEW = 3, ACT_BACK = 4 };
+
+/* ---- Launcher icon: a display with capture brackets --------------------------
+ *
+ * A "screenshot" mark: a monitor outline plus the four corner brackets that mean
+ * "this region is what gets captured". Derived from the screenshot_monitor mark in
+ * Material Symbols (Apache-2.0), redrawn as strokes so it matches the toolbox icons.
+ *
+ * In the 24x24 space used below the display is (2.5,4.5)-(21.5,16.5) with r=2 corners,
+ * the stand hangs under it, and the brackets frame (6,7.5)-(18,13.5) with a gap at the
+ * middle of each side. The stroke-inclusive bounding box is (1.5,3.5)-(22.5,20.5),
+ * which the transform centres in the 112 px icon as  icon = 8 + svg * 4. */
+
+typedef struct {
+    float scale;    /* icon px per SVG unit */
+    float off;      /* icon px offset of SVG origin (0,0) */
+} screen_capture_glyph_t;
+
+static const screen_capture_glyph_t k_capture_glyph = {
+    .scale = 4.0f,
+    .off = 8.0f,
+};
+
+/* The painter supersamples 16x per pixel, so a glyph with this many primitives is
+ * evaluated about 3.6 million times. Each primitive therefore gets a bounding-box
+ * reject first: a handful of compares, against the sqrt/atan2f the full test costs.
+ * Without it this icon took seconds to paint and tripped the task watchdog at boot. */
+
+/* Distance to a circular arc, clamped at its two endpoints. Angles are SVG's: degrees,
+ * 0 = +x, increasing clockwise because the y axis points down. */
+static bool arc_hit(float x, float y, float cx, float cy, float r,
+                    float a1, float a2, float half)
+{
+    const float reach = r + half;
+    if (x < cx - reach || x > cx + reach || y < cy - reach || y > cy + reach) {
+        return false;
+    }
+
+    const float dx = x - cx;
+    const float dy = y - cy;
+    const float dist = sqrtf((dx * dx) + (dy * dy));
+
+    float ang = atan2f(dy, dx) * (180.0f / (float)M_PI);
+    if (ang < 0.0f) {
+        ang += 360.0f;
+    }
+
+    if (ang >= a1 && ang <= a2) {
+        return fabsf(dist - r) <= half;
+    }
+
+    /* Outside the sweep the nearest point is one of the arc's ends. */
+    float best = 1e9f;
+    const float ends[2] = { a1, a2 };
+    for (int i = 0; i < 2; i++) {
+        const float ra = ends[i] * ((float)M_PI / 180.0f);
+        const float ex = cx + (r * cosf(ra));
+        const float ey = cy + (r * sinf(ra));
+        const float d = sqrtf(((x - ex) * (x - ex)) + ((y - ey) * (y - ey)));
+        if (d < best) {
+            best = d;
+        }
+    }
+    return best <= half;
+}
+
+static bool seg_hit(float x, float y, float ax, float ay, float bx, float by, float half)
+{
+    if (x < fminf(ax, bx) - half || x > fmaxf(ax, bx) + half ||
+        y < fminf(ay, by) - half || y > fmaxf(ay, by) + half) {
+        return false;
+    }
+    return toolbox_icon_dist_to_segment(x, y, ax, ay, bx, by) <= half;
+}
+
+static bool screen_capture_is_glyph(float x, float y, void *ctx)
+{
+    const screen_capture_glyph_t *g = (const screen_capture_glyph_t *)ctx;
+
+    /* The icon is supersampled by the painter; reject the cheap half first. */
+    if (x < g->off || y < g->off) {
+        return false;
+    }
+
+    const float sx = (x - g->off) / g->scale;
+    const float sy = (y - g->off) / g->scale;
+    const float half = 1.0f;    /* the drawn stroke-width 2, halved, in SVG units */
+
+    /* Display: the four rounded corners. */
+    if (arc_hit(sx, sy, 4.5f, 6.5f, 2.0f, 180.0f, 270.0f, half)) return true;
+    if (arc_hit(sx, sy, 19.5f, 6.5f, 2.0f, 270.0f, 360.0f, half)) return true;
+    if (arc_hit(sx, sy, 19.5f, 14.5f, 2.0f, 0.0f, 90.0f, half)) return true;
+    if (arc_hit(sx, sy, 4.5f, 14.5f, 2.0f, 90.0f, 180.0f, half)) return true;
+
+    /* Display: the edges. */
+    if (seg_hit(sx, sy, 4.5f, 4.5f, 19.5f, 4.5f, half)) return true;
+    if (seg_hit(sx, sy, 4.5f, 16.5f, 19.5f, 16.5f, half)) return true;
+    if (seg_hit(sx, sy, 2.5f, 6.5f, 2.5f, 14.5f, half)) return true;
+    if (seg_hit(sx, sy, 21.5f, 6.5f, 21.5f, 14.5f, half)) return true;
+
+    /* The stand. */
+    if (seg_hit(sx, sy, 12.0f, 16.5f, 12.0f, 19.5f, half)) return true;
+    if (seg_hit(sx, sy, 8.5f, 19.5f, 15.5f, 19.5f, half)) return true;
+
+    /* The capture brackets, gapped at the middle of each side so they read as a frame
+     * rather than as a second rectangle. */
+    if (seg_hit(sx, sy, 6.0f, 7.5f, 9.0f, 7.5f, half)) return true;
+    if (seg_hit(sx, sy, 6.0f, 7.5f, 6.0f, 10.5f, half)) return true;
+    if (seg_hit(sx, sy, 15.0f, 7.5f, 18.0f, 7.5f, half)) return true;
+    if (seg_hit(sx, sy, 18.0f, 7.5f, 18.0f, 10.5f, half)) return true;
+    if (seg_hit(sx, sy, 6.0f, 10.5f, 6.0f, 13.5f, half)) return true;
+    if (seg_hit(sx, sy, 6.0f, 13.5f, 9.0f, 13.5f, half)) return true;
+    if (seg_hit(sx, sy, 18.0f, 10.5f, 18.0f, 13.5f, half)) return true;
+    if (seg_hit(sx, sy, 15.0f, 13.5f, 18.0f, 13.5f, half)) return true;
+
+    return false;
+}
+
+static toolbox_icon_state_t s_icon_state;
+
+static const lv_image_dsc_t *screen_capture_launcher_icon(void)
+{
+    /* Teal, so it reads apart from the two blue toolbox apps. */
+    return toolbox_icon_paint(&s_icon_state, 0x14, 0x9E, 0x8C,
+                              screen_capture_is_glyph, (void *)&k_capture_glyph, TAG);
+}
 
 static ScreenCaptureApp *g_app = nullptr;
 
@@ -29,9 +153,7 @@ ScreenCaptureApp::ScreenCaptureApp()
       rec_label_(nullptr),
       ui_timer_(nullptr),
       main_panel_(nullptr),
-      gallery_panel_(nullptr),
       viewer_panel_(nullptr),
-      gallery_list_(nullptr),
       viewer_img_(nullptr),
       viewer_data_(nullptr),
       viewer_dsc_{},
@@ -46,6 +168,15 @@ ScreenCaptureApp::~ScreenCaptureApp()
 bool ScreenCaptureApp::init(void)
 {
     g_app = this;
+
+    /* The launcher icon has to be set here, not in run(): the core builds the home
+     * screen during start(), which is after every app's init() but before any app's
+     * run(), so an icon assigned in run() arrives after the widget that shows it. */
+    const lv_image_dsc_t *icon = screen_capture_launcher_icon();
+    if (icon != nullptr) {
+        setLauncherIconImage(esp_brookesia::gui::StyleImage::IMAGE(icon));
+    }
+
     return true;
 }
 
@@ -116,31 +247,8 @@ bool ScreenCaptureApp::run(void)
     lv_obj_center(view_lbl);
     lv_obj_add_event_cb(view, onEvent, LV_EVENT_CLICKED, (void *)(intptr_t)ACT_VIEW);
 
-    /* ---- gallery panel: list of screenshots ---- */
-    gallery_panel_ = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(gallery_panel_, w, h);
-    lv_obj_align(gallery_panel_, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_flex_flow(gallery_panel_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(gallery_panel_, 20, 0);
-    lv_obj_set_style_pad_row(gallery_panel_, 12, 0);
-    lv_obj_set_style_border_width(gallery_panel_, 0, 0);
-
-    lv_obj_t *g_header = lv_obj_create(gallery_panel_);
-    lv_obj_set_width(g_header, LV_PCT(100));
-    lv_obj_set_height(g_header, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(g_header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(g_header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(g_header, LV_OBJ_FLAG_SCROLLABLE);
-    make_back_button(g_header);
-    make_title(g_header, "Captures");
-
-    gallery_list_ = lv_obj_create(gallery_panel_);
-    lv_obj_set_width(gallery_list_, LV_PCT(100));
-    lv_obj_set_flex_grow(gallery_list_, 1);
-    lv_obj_set_flex_flow(gallery_list_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(gallery_list_, 0, 0);
-    lv_obj_set_style_pad_row(gallery_list_, 8, 0);
-    lv_obj_set_scroll_dir(gallery_list_, LV_DIR_VER);
+    /* Browsing the captures is the shared file picker's job; this app only needs the
+     * capture controls and an image viewer. */
 
     /* ---- viewer panel: full-screen screenshot ---- */
     viewer_panel_ = lv_obj_create(lv_screen_active());
@@ -181,12 +289,13 @@ bool ScreenCaptureApp::run(void)
 
 bool ScreenCaptureApp::back(void)
 {
-    if (active_screen_ == SCREEN_VIEWER) {
-        closeViewer();
+    /* The picker is an overlay on the system layer, so it takes the back gesture first. */
+    if (file_picker::is_open()) {
+        file_picker::close();
         return true;
     }
-    if (active_screen_ == SCREEN_GALLERY) {
-        showScreen(SCREEN_MAIN);
+    if (active_screen_ == SCREEN_VIEWER) {
+        closeViewer();
         return true;
     }
     notifyCoreClosed();
@@ -195,6 +304,8 @@ bool ScreenCaptureApp::back(void)
 
 bool ScreenCaptureApp::close(void)
 {
+    file_picker::close();
+
     if (ui_timer_ != nullptr) {
         lv_timer_delete(ui_timer_);
         ui_timer_ = nullptr;
@@ -206,11 +317,8 @@ bool ScreenCaptureApp::close(void)
     status_label_ = nullptr;
     rec_label_ = nullptr;
     main_panel_ = nullptr;
-    gallery_panel_ = nullptr;
     viewer_panel_ = nullptr;
-    gallery_list_ = nullptr;
     viewer_img_ = nullptr;
-    gallery_files_.clear();
     return true;
 }
 
@@ -219,79 +327,12 @@ void ScreenCaptureApp::showScreen(Screen s)
     active_screen_ = s;
 
     lv_obj_add_flag(main_panel_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(gallery_panel_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(viewer_panel_, LV_OBJ_FLAG_HIDDEN);
 
     if (s == SCREEN_MAIN) {
         lv_obj_clear_flag(main_panel_, LV_OBJ_FLAG_HIDDEN);
-    } else if (s == SCREEN_GALLERY) {
-        rebuildGallery();
-        lv_obj_clear_flag(gallery_panel_, LV_OBJ_FLAG_HIDDEN);
     } else if (s == SCREEN_VIEWER) {
         lv_obj_clear_flag(viewer_panel_, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static bool ends_with_png(const char *name)
-{
-    size_t n = strlen(name);
-    if (n < 4) {
-        return false;
-    }
-    const char *ext = name + n - 4;
-    return ext[0] == '.' &&
-           (ext[1] == 'p' || ext[1] == 'P') &&
-           (ext[2] == 'n' || ext[2] == 'N') &&
-           (ext[3] == 'g' || ext[3] == 'G');
-}
-
-void ScreenCaptureApp::rebuildGallery(void)
-{
-    if (gallery_list_ == nullptr) {
-        return;
-    }
-
-    lv_obj_clean(gallery_list_);
-    gallery_files_.clear();
-
-    std::vector<std::string> names;
-    DIR *d = opendir("/sdcard/shots");
-    if (d != nullptr) {
-        struct dirent *e;
-        while ((e = readdir(d)) != nullptr) {
-            /* FATFS returns uppercase 8.3 names (SHOT0000.PNG) with LFN off, so the
-             * extension check must be case-insensitive. */
-            if (ends_with_png(e->d_name)) {
-                names.push_back(e->d_name);
-            }
-        }
-        closedir(d);
-    }
-
-    if (names.empty()) {
-        lv_obj_t *lbl = lv_label_create(gallery_list_);
-        lv_label_set_text(lbl, "No screenshots yet.");
-        return;
-    }
-
-    /* Newest first: the 4-digit zero-padded names sort numerically. */
-    std::sort(names.rbegin(), names.rend());
-
-    for (std::string name : names) {
-        /* FATFS returns uppercase 8.3 names; display them lowercase. */
-        std::transform(name.begin(), name.end(), name.begin(),
-                       [](unsigned char c) { return (char)std::tolower(c); });
-        gallery_files_.push_back("/sdcard/shots/" + name);
-    }
-
-    for (const std::string &path : gallery_files_) {
-        lv_obj_t *btn = lv_btn_create(gallery_list_);
-        lv_obj_set_width(btn, LV_PCT(100));
-        lv_obj_set_height(btn, 52);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, path.c_str() + strlen("/sdcard/shots/"));
-        lv_obj_center(lbl);
-        lv_obj_add_event_cb(btn, onGalleryFileClick, LV_EVENT_CLICKED, (void *)path.c_str());
     }
 }
 
@@ -359,7 +400,7 @@ void ScreenCaptureApp::closeViewer(void)
     free(viewer_data_);
     viewer_data_ = nullptr;
     viewer_dsc_.data = nullptr;
-    showScreen(SCREEN_GALLERY);
+    showScreen(SCREEN_MAIN);
 }
 
 void ScreenCaptureApp::refresh(void)
@@ -399,24 +440,33 @@ void ScreenCaptureApp::onEvent(lv_event_t *e)
                 : "Failed to start recording (SD card?).");
         }
     } else if (act == ACT_VIEW) {
-        app->showScreen(SCREEN_GALLERY);
+        /* The shared picker browses the whole card, starting where captures land. */
+        if (!file_picker::open("/sdcard/shots", ".png",
+                               ScreenCaptureApp::onFilePicked,
+                               ScreenCaptureApp::onFilePickCancelled, app)) {
+            lv_label_set_text(app->status_label_, "Cannot open the file picker.");
+        }
     } else if (act == ACT_BACK) {
         if (app->active_screen_ == SCREEN_VIEWER) {
             app->closeViewer();
-        } else if (app->active_screen_ == SCREEN_GALLERY) {
-            app->showScreen(SCREEN_MAIN);
         }
     }
     app->refresh();
 }
 
-void ScreenCaptureApp::onGalleryFileClick(lv_event_t *e)
+void ScreenCaptureApp::onFilePicked(const char *path, void *user)
 {
-    const char *path = (const char *)lv_event_get_user_data(e);
-    ScreenCaptureApp *app = g_app;
+    ScreenCaptureApp *app = (ScreenCaptureApp *)user;
     if (app != nullptr && path != nullptr) {
         app->openViewer(path);
     }
+}
+
+void ScreenCaptureApp::onFilePickCancelled(const char *path, void *user)
+{
+    (void)path;
+    (void)user;
+    /* Nothing to undo: the picker covered the app, which is still where it was. */
 }
 
 void ScreenCaptureApp::onTick(lv_timer_t *t)

@@ -13,6 +13,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "FilePicker.hpp"
 #ifdef ESP_UTILS_LOG_TAG
 #undef ESP_UTILS_LOG_TAG
 #endif
@@ -86,7 +87,7 @@ namespace esp_brookesia::apps
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, LV_PART_MAIN);
         status_label = lv_label_create(lv_scr_act());
-        lv_label_set_text(status_label, sd_mounted ? "loading files..." : "sd error");
+        lv_label_set_text(status_label, sd_mounted ? "choose a video..." : "sd error");
         lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(status_label, DISPLAY_WIDTH);
         lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 0);
@@ -98,25 +99,33 @@ namespace esp_brookesia::apps
             return true;
         }
 
-        if (getAviFileList("/sdcard/avi") != ESP_OK || avi_file_count == 0)
+        /* Pick a file rather than auto-playing a fixed folder. The picker walks the whole
+         * card, which is how the clips the Screen Capture app writes under /sdcard/recs
+         * get played. Cancelling falls back to the old behaviour: play everything in
+         * /sdcard/avi. */
+        if (!file_picker::open("/sdcard/avi", ".avi", onFilePicked, onFilePickCancelled, this) &&
+            !file_picker::open("/sdcard", ".avi", onFilePicked, onFilePickCancelled, this))
         {
             bsp_display_lock(-1);
-            lv_label_set_text(status_label, "avi error");
+            if (status_label)
+            {
+                lv_label_set_text(status_label, "no avi files");
+            }
             bsp_display_unlock();
-            return true;
         }
 
-        bsp_display_lock(-1);
-        lv_obj_del(status_label);
-        status_label = nullptr;
-        bsp_display_unlock();
-
-        return startPlaybackTask();
+        return true;
     }
 
     bool VideoPlayer::back(void)
     {
         ESP_UTILS_LOGD("Back");
+        /* The picker overlays the app, so it takes the back gesture first. */
+        if (file_picker::is_open())
+        {
+            file_picker::close();
+            return true;
+        }
         // If the app needs to exit, call notifyCoreClosed() to notify the core to close the app
         ESP_UTILS_CHECK_FALSE_RETURN(notifyCoreClosed(), false, "Notify core closed failed");
         return true;
@@ -125,6 +134,7 @@ namespace esp_brookesia::apps
     bool VideoPlayer::close()
     {
         ESP_UTILS_LOGD("Close");
+        file_picker::close();
         if (!stopPlaybackTask(pdMS_TO_TICKS(2000))) {
             ESP_LOGE(ESP_UTILS_LOG_TAG, "Playback task did not stop before close");
             return false;
@@ -323,6 +333,94 @@ namespace esp_brookesia::apps
 
         closedir(dir);
         return ESP_OK;
+    }
+
+    /* Replace the playlist with a single file, the one the picker returned. */
+    bool VideoPlayer::setPlaylistToFile(const char *path)
+    {
+        if (path == nullptr) {
+            return false;
+        }
+
+        if (avi_file_list)
+        {
+            for (int i = 0; i < avi_file_count; i++)
+            {
+                free(avi_file_list[i]);
+            }
+            free(avi_file_list);
+            avi_file_list = nullptr;
+            avi_file_count = 0;
+        }
+
+        avi_file_list = (char **)malloc(sizeof(char *));
+        if (!avi_file_list)
+        {
+            return false;
+        }
+
+        avi_file_list[0] = strdup(path);
+        if (!avi_file_list[0])
+        {
+            free(avi_file_list);
+            avi_file_list = nullptr;
+            return false;
+        }
+
+        avi_file_count = 1;
+        return true;
+    }
+
+    void VideoPlayer::onFilePicked(const char *path, void *user)
+    {
+        VideoPlayer *self = static_cast<VideoPlayer *>(user);
+        if (self == nullptr || path == nullptr)
+        {
+            return;
+        }
+
+        if (!self->setPlaylistToFile(path))
+        {
+            ESP_LOGE(ESP_UTILS_LOG_TAG, "no memory to play %s", path);
+            return;
+        }
+
+        bsp_display_lock(-1);
+        if (self->status_label)
+        {
+            lv_obj_del(self->status_label);
+            self->status_label = nullptr;
+        }
+        bsp_display_unlock();
+
+        self->startPlaybackTask();
+    }
+
+    void VideoPlayer::onFilePickCancelled(const char *path, void *user)
+    {
+        (void)path;
+        VideoPlayer *self = static_cast<VideoPlayer *>(user);
+        if (self == nullptr)
+        {
+            return;
+        }
+
+        /* Nothing chosen: keep the old behaviour and play the whole default folder. */
+        if (self->getAviFileList("/sdcard/avi") == ESP_OK && self->avi_file_count > 0)
+        {
+            bsp_display_lock(-1);
+            if (self->status_label)
+            {
+                lv_obj_del(self->status_label);
+                self->status_label = nullptr;
+            }
+            bsp_display_unlock();
+
+            self->startPlaybackTask();
+            return;
+        }
+
+        self->notifyCoreClosed();
     }
 
     esp_err_t VideoPlayer::initDisplayBypass()

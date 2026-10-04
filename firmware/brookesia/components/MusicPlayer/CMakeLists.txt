@@ -6,7 +6,7 @@ file(GLOB_RECURSE PROJ_SRCS_CPP ${PROJ_SRC}/*.cpp)
 idf_component_register(
     SRCS  ${PROJ_SRCS_C} ${PROJ_SRCS_CPP}
     INCLUDE_DIRS ${PROJ_SRC}
-    REQUIRES brookesia_core esp32_p4_wifi6_touch_lcd_4b driver bsp_extra
+    REQUIRES brookesia_core esp32_p4_wifi6_touch_lcd_4b driver bsp_extra FilePicker
 )
 
 set_source_files_properties(
