@@ -185,8 +185,9 @@ esp_err_t screen_capture_hotkeys_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Same stack as the app's own screenshot worker: the encode happens on this task. */
-    if (xTaskCreate(hotkey_task, "cap_hotkey", 8192, NULL, 4, &s_task) != pdPASS) {
+    /* Matches the app's own screenshot worker: the capture needs the stack the encode
+     * and the snapshot together take, and it runs here, not on the LVGL task. */
+    if (xTaskCreate(hotkey_task, "cap_hotkey", 12288, NULL, 4, &s_task) != pdPASS) {
         vQueueDelete(s_queue);
         s_queue = NULL;
         return ESP_ERR_NO_MEM;

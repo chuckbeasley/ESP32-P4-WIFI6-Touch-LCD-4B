@@ -49,11 +49,12 @@ static const char *TAG = "screen_capture";
 static int s_shot_seq = 0;
 static int s_rec_seq = 0;
 
-/* Screenshot downscale. The PNG encoder is software (stored deflate) and a full
- * 720x720 pass walks ~1.5 MB through PSRAM, which starves the esp-hosted SDIO task
- * and can take the board down — the same fault the HTTP screenshot helper documents.
- * Scale 2 gives a 360x360 capture, a quarter of the pixels and a sixteenth of the work. */
-#define SCREENSHOT_SCALE 2
+/* Captures are taken at the panel's native resolution. The encoder is software (stored
+ * deflate) and a full 720x720 pass walks ~1.5 MB through PSRAM, which used to starve the
+ * esp-hosted SDIO task and take the board down — the same fault the HTTP screenshot
+ * helper documents. What makes scale 1 safe is the yield between stored blocks at the
+ * bottom of the encoder's block loop, not a smaller image. */
+#define SCREENSHOT_SCALE 1
 
 static SemaphoreHandle_t s_shot_mutex;      /* serialises screenshot captures */
 static SemaphoreHandle_t s_rec_mutex;      /* guards recording state transitions */
@@ -228,6 +229,11 @@ static esp_err_t png_encode_rgb565(const uint8_t *rgb565, int w, int h, int scal
                 if (ad_since >= 256) { ad_a %= 65521; ad_b %= 65521; ad_since = 0; }
             }
         }
+
+        /* A stored block is ~30 rows of a full-resolution capture, so this yields roughly
+         * every 30 ms of work. Without it the encode is a single long CPU burst that
+         * starves the esp-hosted SDIO task and can take the board down mid-screenshot. */
+        vTaskDelay(1);
     }
 
     ad_a %= 65521;
@@ -671,7 +677,9 @@ static void screenshot_delayed_task(void *arg)
 esp_err_t screen_capture_screenshot_delayed(uint32_t delay_ms)
 {
     TaskHandle_t t = NULL;
-    if (xTaskCreate(screenshot_delayed_task, "shot", 8192, (void *)(uintptr_t)delay_ms, 5, &t) != pdPASS) {
+    /* A capture needs well over the main task's stack: 8 KB was not enough headroom
+     * once the snapshot and a full-resolution encode were both on this task. */
+    if (xTaskCreate(screenshot_delayed_task, "shot", 12288, (void *)(uintptr_t)delay_ms, 5, &t) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
