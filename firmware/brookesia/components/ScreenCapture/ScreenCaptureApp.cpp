@@ -11,6 +11,7 @@
 
 #include "esp_log.h"
 #include "screen_capture.h"
+#include "screen_capture_hotkeys.h"
 #include "toolbox_icons.hpp"
 #include "FilePicker.hpp"
 
@@ -175,6 +176,14 @@ bool ScreenCaptureApp::init(void)
     const lv_image_dsc_t *icon = screen_capture_launcher_icon();
     if (icon != nullptr) {
         setLauncherIconImage(esp_brookesia::gui::StyleImage::IMAGE(icon));
+    }
+
+    /* The three-finger gestures have to work in every app, so install them at boot
+     * rather than when this app is opened. The touch device is registered long before
+     * the apps install, so this is the earliest safe point. */
+    esp_err_t err = screen_capture_hotkeys_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "gesture hotkeys unavailable: %s", esp_err_to_name(err));
     }
 
     return true;

@@ -2,7 +2,7 @@
 #
 # Device-wide screen capture: PNG screenshots + MJPEG (AVI) screen recording.
 idf_component_register(
-    SRCS "src/screen_capture.c" "ScreenCaptureApp.cpp"
+    SRCS "src/screen_capture.c" "src/screen_capture_hotkeys.c" "ScreenCaptureApp.cpp"
     INCLUDE_DIRS "include" "."
     REQUIRES
         brookesia_core
