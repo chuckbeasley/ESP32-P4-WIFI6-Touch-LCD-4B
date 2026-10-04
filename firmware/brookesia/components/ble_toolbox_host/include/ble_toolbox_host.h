@@ -42,6 +42,7 @@ typedef struct {
     bool     connectable;
     bool     scannable;
     bool     directed;             /* directed advertising: someone is being paged */
+    bool     is_scan_response;     /* this report is a scan response, not an advert */
     bool     random_addr;          /* the peer uses a random (not public) address */
 } ble_toolbox_adv_t;
 

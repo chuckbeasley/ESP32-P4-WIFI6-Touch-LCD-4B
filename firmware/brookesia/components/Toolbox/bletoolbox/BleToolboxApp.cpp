@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -286,10 +287,12 @@ static BleToolboxApp *g_app = nullptr;
 #define ACT_MENU_SCAN       1
 #define ACT_MENU_OBSERVER   2
 #define ACT_MENU_AIRTAG     3
+#define ACT_MENU_RADAR      5
 #define ACT_BACK          100
 
 #define ACT_SCAN_START    201
 #define ACT_SCAN_STOP     202
+#define ACT_RADAR_TOGGLE  203
 #define ACT_OBS_START     301
 #define ACT_OBS_STOP      302
 #define ACT_TAG_START     401
@@ -302,6 +305,25 @@ static BleToolboxApp *g_app = nullptr;
 #define ACT_CONN_SERVICES   602
 #define ACT_CONN_WRITE      603
 #define ACT_CONN_SUBSCRIBE  604
+
+/* ---- Proximity radar geometry -------------------------------------------- */
+
+#define RADAR_MAX_DIST_M    10.0f   /* outer ring */
+#define RADAR_REF_RSSI      -60     /* RSSI at 1 m */
+#define RADAR_PATH_LOSS     2.5f    /* indoor path-loss exponent */
+
+/* RSSI (dBm) -> estimated distance (m), clamped to the radar's range. */
+static float tb_rssi_to_distance(int rssi)
+{
+    float d = powf(10.0f, (RADAR_REF_RSSI - (float)rssi) / (10.0f * RADAR_PATH_LOSS));
+    if (d < 0.5f) {
+        d = 0.5f;
+    }
+    if (d > RADAR_MAX_DIST_M) {
+        d = RADAR_MAX_DIST_M;
+    }
+    return d;
+}
 
 BleToolboxApp::BleToolboxApp():
     ESP_Brookesia_PhoneApp(
@@ -322,6 +344,15 @@ BleToolboxApp::BleToolboxApp():
     tag_start_btn(nullptr),
     tag_stop_btn(nullptr),
     tag_glasses_label(nullptr),
+    radar_area(nullptr),
+    radar_blips(nullptr),
+    radar_sweep(nullptr),
+    radar_toggle_btn(nullptr),
+    radar_sweep_angle(0),
+    radar_size(0),
+    radar_blip_objs{},
+    radar_blip_labels{},
+    radar_blip_count(0),
     conn_state_label(nullptr),
     conn_list(nullptr),
     conn_value_label(nullptr),
@@ -431,6 +462,7 @@ bool BleToolboxApp::run(void)
     buildScan();
     buildObserver();
     buildAirTag();
+    buildRadar();
     buildConnect();
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
     buildSpam();
@@ -544,6 +576,14 @@ bool BleToolboxApp::close(void)
     tag_stop_btn = nullptr;
     tag_glasses_label = nullptr;
 
+    radar_area = nullptr;
+    radar_blips = nullptr;
+    radar_sweep = nullptr;
+    radar_toggle_btn = nullptr;
+    memset(radar_blip_objs, 0, sizeof(radar_blip_objs));
+    memset(radar_blip_labels, 0, sizeof(radar_blip_labels));
+    radar_blip_count = 0;
+
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
     spam_family_dd = nullptr;
     spam_state_label = nullptr;
@@ -597,6 +637,22 @@ bool BleToolboxApp::ensureService(void)
 void BleToolboxApp::latchAdv(const ble_toolbox_adv_t *adv)
 {
     scan_total++;
+
+    /* A scan response carries the name an advertisement may have omitted. Merge it
+     * into the existing row; a scan response is not itself connectable. */
+    if (adv->is_scan_response) {
+        for (int i = 0; i < scan_latch_len; i++) {
+            if (memcmp(scan_latch[i].adv.addr, adv->addr, 6) == 0) {
+                if (adv->name[0] != '\0' && scan_latch[i].adv.name[0] == '\0') {
+                    snprintf(scan_latch[i].adv.name, sizeof(scan_latch[i].adv.name),
+                             "%s", adv->name);
+                    list_dirty = true;
+                }
+                break;
+            }
+        }
+        return;
+    }
 
     /* The Scan screen is for connecting, so only connectable devices are kept. A
      * non-connectable beacon is noise here (it is the Observer's job to log it). */
@@ -1387,7 +1443,7 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
             ble_toolbox_scan_params_t p = {};
             p.interval_ms = 100;
             p.window_ms = 100;
-            p.passive = true;
+            p.passive = false;
             p.filter_duplicates = true;
             app->resetCounters();
             if (ble_toolbox_host_scan_start(&p) == ESP_OK) {
@@ -1448,6 +1504,13 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
     }
 #endif
 
+    /* Animate the radar sweep and reveal blips only while a scan is running. */
+    if (app->scanning && app->active_screen == SCREEN_RADAR && app->radar_sweep != nullptr) {
+        app->radar_sweep_angle = (app->radar_sweep_angle + 40) % 3600;  /* 4 deg per tick */
+        lv_obj_set_style_transform_rotation(app->radar_sweep, app->radar_sweep_angle, 0);
+        app->radarReveal();
+    }
+
     /* Rebuild only the visible screen, and only when something arrived. Rebuilding all
      * of them every 500 ms would churn LVGL objects for screens nobody is looking at. */
     if (!app->list_dirty) {
@@ -1464,6 +1527,9 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
         break;
     case SCREEN_AIRTAG:
         app->refreshAirTag();
+        break;
+    case SCREEN_RADAR:
+        app->refreshRadar();
         break;
     case SCREEN_CONNECT:
         app->refreshConnect();
@@ -1497,6 +1563,7 @@ void BleToolboxApp::showScreen(Screen screen)
     case SCREEN_SCAN:     refreshScan();     break;
     case SCREEN_OBSERVER: refreshObserver(); break;
     case SCREEN_AIRTAG:   refreshAirTag();   break;
+    case SCREEN_RADAR:    refreshRadar();    break;
     case SCREEN_CONNECT:  refreshConnect();  break;
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
     case SCREEN_SPAM:     refreshSpam();     break;
@@ -1530,8 +1597,9 @@ void BleToolboxApp::buildMenu(void)
     /* Only three entries without the transmit path, four with it. The entry appears
      * because the capability was compiled in, not because a flag hides a button — which
      * is the distinction spec section 10.5 draws for the Wi-Fi toolbox's injection. */
-    static const char *entries[4] = {
+    static const char *entries[5] = {
         "BLE Scan",
+        "Proximity Radar",
         "BLE Observer",
         "AirTag Monitor",
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
@@ -1540,14 +1608,14 @@ void BleToolboxApp::buildMenu(void)
         "",
 #endif
     };
-    static const int codes[4] = { ACT_MENU_SCAN, ACT_MENU_OBSERVER, ACT_MENU_AIRTAG,
-                                  ACT_MENU_SPAM };
+    static const int codes[5] = { ACT_MENU_SCAN, ACT_MENU_RADAR, ACT_MENU_OBSERVER,
+                                  ACT_MENU_AIRTAG, ACT_MENU_SPAM };
 
     const int entry_count =
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
-        4;
+        5;
 #else
-        3;
+        4;
 #endif
 
     /* Menu entries are the app's navigation and carry a font of their own rather than the
@@ -1654,6 +1722,203 @@ void BleToolboxApp::buildObserver(void)
      * scrollable, and raising the font size only increased how much was cut off. See the
      * helper for the detail. */
     obs_log = toolbox_make_log(panel);
+}
+
+void BleToolboxApp::buildRadar(void)
+{
+    lv_area_t area = getVisualArea();
+    lv_obj_t *panel = toolbox_make_screen(screens[SCREEN_RADAR], area, "Proximity Radar",
+                                          LV_SYMBOL_LEFT, onEvent, (void *)(intptr_t)ACT_BACK);
+
+    /* The radar circle fills whatever the flex column leaves after the header and the
+     * toggle button, so the screen can never overflow and scroll. Its real height is read
+     * back after a forced layout pass, then the rings and sweep are sized against it. */
+    radar_area = lv_obj_create(panel);
+    lv_obj_set_width(radar_area, LV_PCT(100));
+    lv_obj_set_flex_grow(radar_area, 1);
+    lv_obj_set_style_pad_all(radar_area, 0, 0);
+    lv_obj_set_style_bg_color(radar_area, lv_color_hex(0x101820), 0);
+    lv_obj_set_style_bg_opa(radar_area, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(radar_area, 0, 0);
+    lv_obj_clear_flag(radar_area, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Single toggle button: Start Scan <-> Stop Scan. */
+    radar_toggle_btn = toolbox_make_button(panel, "Start Scan", onEvent,
+                                           (void *)(intptr_t)ACT_RADAR_TOGGLE, 44);
+    tb_group_add(radar_toggle_btn);
+
+    /* Resolve the flex layout so the radar area's height is final before the rings and
+     * sweep are sized against it. */
+    lv_obj_update_layout(panel);
+    radar_size = lv_obj_get_height(radar_area);
+    if (radar_size < 120) {
+        radar_size = 120;
+    }
+
+    const int max_r = (radar_size / 2) - 12;
+
+    /* Concentric distance rings. */
+    static const float ring_dists[] = { 1.0f, 2.0f, 5.0f, 10.0f };
+    for (int i = 0; i < 4; i++) {
+        const int r = (int)(ring_dists[i] / RADAR_MAX_DIST_M * (float)max_r);
+
+        lv_obj_t *ring = lv_obj_create(radar_area);
+        lv_obj_set_size(ring, r * 2, r * 2);
+        lv_obj_align(ring, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(ring, 1, 0);
+        lv_obj_set_style_border_color(ring, lv_color_hex(0x2a4a6a), 0);
+        lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *lbl = lv_label_create(radar_area);
+        lv_label_set_text_fmt(lbl, "%.0f m", (double)ring_dists[i]);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0x8aa8c8), 0);
+        lv_obj_set_style_text_font(lbl, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -r + 8);
+    }
+
+    /* Transparent overlay that holds the blips. */
+    radar_blips = lv_obj_create(radar_area);
+    lv_obj_set_size(radar_blips, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(radar_blips, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(radar_blips, 0, 0);
+    lv_obj_clear_flag(radar_blips, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(radar_blips, LV_OBJ_FLAG_CLICKABLE);
+
+    /* Sweep line: a clock-hand from the centre outward in a single direction. */
+    radar_sweep = lv_obj_create(radar_area);
+    lv_obj_set_size(radar_sweep, max_r, 2);
+    lv_obj_align(radar_sweep, LV_ALIGN_CENTER, max_r / 2, 0);
+    lv_obj_set_style_bg_color(radar_sweep, lv_color_hex(0x30d060), 0);
+    lv_obj_set_style_bg_opa(radar_sweep, LV_OPA_70, 0);
+    lv_obj_set_style_radius(radar_sweep, LV_RADIUS_CIRCLE, 0);
+    lv_obj_clear_flag(radar_sweep, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(radar_sweep, LV_OBJ_FLAG_CLICKABLE);
+    /* Rotate around the line's left end, which sits at the radar centre. */
+    lv_obj_set_style_transform_pivot_x(radar_sweep, 0, 0);
+    lv_obj_set_style_transform_pivot_y(radar_sweep, 1, 0);
+    radar_sweep_angle = 0;
+}
+
+void BleToolboxApp::refreshRadar(void)
+{
+    if (radar_area == nullptr || radar_blips == nullptr) {
+        return;
+    }
+
+    updateRadarToggle();
+
+    /* Drop blips for devices that are no longer in the latch. */
+    while (radar_blip_count > scan_latch_len) {
+        radar_blip_count--;
+        if (radar_blip_objs[radar_blip_count] != nullptr) {
+            lv_obj_del(radar_blip_objs[radar_blip_count]);
+            radar_blip_objs[radar_blip_count] = nullptr;
+        }
+        if (radar_blip_labels[radar_blip_count] != nullptr) {
+            lv_obj_del(radar_blip_labels[radar_blip_count]);
+            radar_blip_labels[radar_blip_count] = nullptr;
+        }
+    }
+
+    for (int i = 0; i < scan_latch_len; i++) {
+        const ble_toolbox_adv_t *a = &scan_latch[i].adv;
+
+        /* Create the dot + name label for a newly seen device. Positions are left to
+         * the sweep (radarReveal), so a blip appears only as the sweep passes. */
+        if (i >= radar_blip_count) {
+            lv_obj_t *blip = lv_obj_create(radar_blips);
+            lv_obj_set_size(blip, 10, 10);
+            lv_obj_set_style_radius(blip, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_color(blip, lv_color_hex(0x30d060), 0);
+            lv_obj_set_style_bg_opa(blip, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(blip, 0, 0);
+            lv_obj_clear_flag(blip, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(blip, LV_OBJ_FLAG_CLICKABLE);
+            radar_blip_objs[i] = blip;
+
+            lv_obj_t *lbl = lv_label_create(radar_blips);
+            char name[20];
+            snprintf(name, sizeof(name), "%s", (a->name[0] != '\0') ? a->name : "No advertised name");
+            lv_label_set_text(lbl, name);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(0x30d060), 0);
+            lv_obj_set_style_text_font(lbl, TOOLBOX_FONT_DETAIL, 0);
+            lv_obj_set_style_text_opa(lbl, LV_OPA_TRANSP, 0);
+            radar_blip_labels[i] = lbl;
+
+            radar_blip_count = i + 1;
+        }
+    }
+}
+
+void BleToolboxApp::radarReveal(void)
+{
+    const int n = radar_blip_count;
+    if (n == 0 || radar_size <= 0) {
+        return;
+    }
+
+    const int max_r = (radar_size / 2) - 12;
+    const int reveal_deg = 15;   /* how wide the reveal wedge is */
+
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *blip = radar_blip_objs[i];
+        if (blip == nullptr) {
+            continue;
+        }
+
+        /* Fixed angle, spread evenly. The angle is not a real bearing (one
+         * omnidirectional antenna gives no direction), just visual separation. */
+        const int angle = (n > 1) ? (i * 3600 / n) : 0;   /* 0.1-degree units */
+
+        /* How far the sweep has travelled past this blip (0..3599). */
+        int diff = radar_sweep_angle - angle;
+        diff %= 3600;
+        if (diff < 0) {
+            diff += 3600;
+        }
+
+        if (diff < reveal_deg * 10 && i < scan_latch_len) {
+            /* The sweep just passed: update from the latest RSSI. */
+            const ble_toolbox_adv_t *a = &scan_latch[i].adv;
+            const float d = tb_rssi_to_distance((int)a->rssi);
+            const int r = (int)(d / RADAR_MAX_DIST_M * (float)max_r);
+            const float rad = (float)angle * (3.14159265358979323846f / 1800.0f);
+            const int dx = (int)((float)r * cosf(rad));
+            const int dy = (int)((float)r * sinf(rad));
+
+            lv_obj_align(blip, LV_ALIGN_CENTER, dx, dy);
+            if (radar_blip_labels[i] != nullptr) {
+                char name[20];
+                snprintf(name, sizeof(name), "%s", (a->name[0] != '\0') ? a->name : "No advertised name");
+                lv_label_set_text(radar_blip_labels[i], name);
+                lv_obj_align(radar_blip_labels[i], LV_ALIGN_CENTER, dx + 12, dy - 12);
+            }
+        }
+
+        /* Persistence trail: full at the sweep, fading to transparent half a turn
+         * behind it. */
+        int opa = 255 - (diff * 255 / 1800);
+        if (opa < 0) {
+            opa = 0;
+        }
+        lv_obj_set_style_bg_opa(blip, (lv_opa_t)opa, 0);
+        if (radar_blip_labels[i] != nullptr) {
+            lv_obj_set_style_text_opa(radar_blip_labels[i], (lv_opa_t)opa, 0);
+        }
+    }
+}
+
+void BleToolboxApp::updateRadarToggle(void)
+{
+    if (radar_toggle_btn == nullptr) {
+        return;
+    }
+    lv_obj_t *label = lv_obj_get_child(radar_toggle_btn, 0);
+    if (label != nullptr) {
+        lv_label_set_text(label, scanning ? "Stop Scan" : "Start Scan");
+    }
 }
 
 void BleToolboxApp::buildConnect(void)
@@ -2227,7 +2492,7 @@ void BleToolboxApp::selfTest(void)
     ble_toolbox_scan_params_t p = {};
     p.interval_ms = 100;
     p.window_ms = 100;
-    p.passive = true;
+    p.passive = false;
     p.filter_duplicates = true;
     scanning = (ble_toolbox_host_scan_start(&p) == ESP_OK);
     ESP_LOGW(TAG, "  scan started: %d", (int)scanning);
@@ -2388,6 +2653,9 @@ void BleToolboxApp::onEvent(lv_event_t *e)
     case ACT_MENU_AIRTAG:
         app->showScreen(SCREEN_AIRTAG);
         break;
+    case ACT_MENU_RADAR:
+        app->showScreen(SCREEN_RADAR);
+        break;
 
     case ACT_BACK:
         app->showScreen(SCREEN_MENU);
@@ -2427,7 +2695,7 @@ void BleToolboxApp::onEvent(lv_event_t *e)
         ble_toolbox_scan_params_t p = {};
         p.interval_ms = 100;
         p.window_ms = 100;
-        p.passive = true;
+        p.passive = false;
         p.filter_duplicates = true;
 
         /* Cleared BEFORE the start, so the first frame of the new run is counted. Clearing
@@ -2458,6 +2726,25 @@ void BleToolboxApp::onEvent(lv_event_t *e)
         if (app->scan_state_label != nullptr) {
             lv_label_set_text(app->scan_state_label, "stopped");
         }
+        break;
+
+    case ACT_RADAR_TOGGLE:
+        if (app->scanning) {
+            (void)ble_toolbox_host_scan_stop();
+            app->scanning = false;
+            app->resetCounters();   /* clear the radar blips and legend */
+        } else if (app->ensureService()) {
+            ble_toolbox_scan_params_t p = {};
+            p.interval_ms = 100;
+            p.window_ms = 100;
+            p.passive = false;
+            p.filter_duplicates = true;
+            app->resetCounters();
+            if (ble_toolbox_host_scan_start(&p) == ESP_OK) {
+                app->scanning = true;
+            }
+        }
+        app->updateRadarToggle();
         break;
 
     case ACT_CONN_DISCONNECT:

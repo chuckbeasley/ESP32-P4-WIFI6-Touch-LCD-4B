@@ -60,6 +60,7 @@ private:
         SCREEN_SCAN,
         SCREEN_OBSERVER,
         SCREEN_AIRTAG,
+        SCREEN_RADAR,
         SCREEN_CONNECT,
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
         SCREEN_SPAM,
@@ -71,6 +72,7 @@ private:
     void buildScan(void);
     void buildObserver(void);
     void buildAirTag(void);
+    void buildRadar(void);
     void buildConnect(void);
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
     void buildSpam(void);
@@ -87,6 +89,9 @@ private:
     void refreshScan(void);
     void refreshObserver(void);
     void refreshAirTag(void);
+    void refreshRadar(void);
+    void radarReveal(void);
+    void updateRadarToggle(void);
     void refreshConnect(void);
     void updateStatus(void);
 
@@ -150,6 +155,17 @@ private:
     lv_obj_t  *tag_start_btn;
     lv_obj_t  *tag_stop_btn;
     lv_obj_t  *tag_glasses_label;
+
+    /* Proximity radar */
+    lv_obj_t  *radar_area;       /* the circle; blips are children of radar_blips */
+    lv_obj_t  *radar_blips;      /* transparent overlay that holds the blips */
+    lv_obj_t  *radar_sweep;      /* the rotating sweep line */
+    lv_obj_t  *radar_toggle_btn; /* single Start/Stop Scan toggle */
+    int        radar_sweep_angle;/* 0.1-degree units */
+    int        radar_size;       /* circle diameter in px, from the visual area */
+    lv_obj_t  *radar_blip_objs[40]; /* persistent blips, revealed by the sweep */
+    lv_obj_t  *radar_blip_labels[40]; /* device-name label next to each blip */
+    int        radar_blip_count;
 
     /* Connected-device GATT browser */
     lv_obj_t  *conn_state_label;

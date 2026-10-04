@@ -142,6 +142,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.scannable = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_ADV_IND ||
                              d->event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_IND);
             adv.directed = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND);
+            adv.is_scan_response = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP);
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
 
             struct ble_hs_adv_fields fields;
@@ -196,6 +197,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.connectable = (d->props & BLE_HCI_ADV_CONN_MASK) != 0;
             adv.scannable   = (d->props & BLE_HCI_ADV_SCAN_MASK) != 0;
             adv.directed    = (d->props & BLE_HCI_ADV_DIRECT_MASK) != 0;
+            adv.is_scan_response = (d->props & BLE_HCI_ADV_SCAN_RSP_MASK) != 0;
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
 
             struct ble_hs_adv_fields fields;
