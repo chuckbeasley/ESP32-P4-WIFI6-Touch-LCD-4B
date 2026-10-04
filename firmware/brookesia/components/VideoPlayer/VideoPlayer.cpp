@@ -169,15 +169,16 @@ namespace esp_brookesia::apps
     bool VideoPlayer::init()
     {
         ESP_UTILS_LOGD("Init");
-        if (bsp_sdcard_mount() == ESP_OK)
+        /* /sdcard is owned and mounted by the SdShare component (esp_tinyusb), not by
+         * bsp_sdcard_mount(). Just check the card came up; mounting here would conflict. */
+        sd_mounted = (bsp_sdcard != NULL);
+        if (sd_mounted)
         {
-            sd_mounted = true;
-            ESP_UTILS_LOGD("SD card mounted successfully");
+            ESP_UTILS_LOGD("SD card available");
         }
         else
         {
-            sd_mounted = false;
-            ESP_LOGE(ESP_UTILS_LOG_TAG, "Failed to mount SD card");
+            ESP_LOGE(ESP_UTILS_LOG_TAG, "SD card not available");
         }
         return true;
     }

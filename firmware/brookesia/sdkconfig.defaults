@@ -8,6 +8,9 @@ CONFIG_FATFS_LFN_HEAP=y
 # USB device mode with the Mass Storage Class, so the SD card can be presented to a
 # host computer as a removable drive. The DCD stays on its default DMA mode.
 CONFIG_TINYUSB_MSC_ENABLED=y
+# How the device names itself on USB.
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="P4-C6-SDCARD"
+CONFIG_TINYUSB_DESC_MSC_STRING="P4-C6-SDCARD"
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y

@@ -34,6 +34,7 @@
 #include "esp_lv_adapter.h"
 #include "lvgl.h"
 #include "src/others/snapshot/lv_snapshot.h"
+#include "sd_share.h"
 
 #include "driver/jpeg_encode.h"
 
@@ -588,6 +589,13 @@ static void pick_unique_name(char *path, size_t len, const char *dir,
 
 esp_err_t screen_capture_screenshot(void)
 {
+    /* If a USB host owns the card, /sdcard is not ours: the host has its own FAT driver
+     * on the raw sectors and anything we write would corrupt its view of the volume. */
+    if (sd_share_host_owns_card()) {
+        ESP_LOGW(TAG, "screenshot refused: the SD card is shared with a USB host");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* Ensure the SD card is mounted (idempotent) before writing, so a capture fired
      * from the delayed task works even if the app's own init failed earlier. */
     (void)screen_capture_init();
@@ -759,6 +767,12 @@ static void record_task(void *arg)
 
 esp_err_t screen_capture_record_start(void)
 {
+    /* Same rule as a screenshot: while the host owns the card, the recording would be
+     * writing into a volume the host is also driving. */
+    if (sd_share_host_owns_card()) {
+        ESP_LOGW(TAG, "recording refused: the SD card is shared with a USB host");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_rec_mutex != NULL) {
         xSemaphoreTake(s_rec_mutex, portMAX_DELAY);
     }

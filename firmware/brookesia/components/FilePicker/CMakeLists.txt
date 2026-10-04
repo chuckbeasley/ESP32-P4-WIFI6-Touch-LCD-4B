@@ -7,4 +7,6 @@ idf_component_register(
     REQUIRES
         lvgl__lvgl
         fatfs
+        # Refuse to browse a card a USB host currently owns.
+        SdShare
 )

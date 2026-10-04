@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "esp_log.h"
+#include "sd_share.h"
 
 static const char *TAG = "FilePicker";
 
@@ -345,6 +346,13 @@ bool open(const char *start_dir, const char *ext_filter,
           Callback on_pick, Callback on_cancel, void *user)
 {
     if (start_dir == nullptr || on_pick == nullptr) {
+        return false;
+    }
+
+    /* While a USB host owns the card there is no /sdcard to browse -- the host is driving
+     * it with its own FAT driver. Refuse rather than list a volume that is not ours. */
+    if (sd_share_host_owns_card()) {
+        ESP_LOGW(TAG, "picker refused: the SD card is shared with a USB host");
         return false;
     }
     if (s.open) {

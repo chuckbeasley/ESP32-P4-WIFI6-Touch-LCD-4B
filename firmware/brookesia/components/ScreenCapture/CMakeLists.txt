@@ -16,4 +16,6 @@ idf_component_register(
         Toolbox
         # Shared file browser for the captures list.
         FilePicker
+        # Cards shared with a USB host are off limits to the capture paths.
+        SdShare
 )

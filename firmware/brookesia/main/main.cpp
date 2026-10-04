@@ -40,6 +40,7 @@
 #include "toolbox/ToolboxApp.hpp"
 #include "bletoolbox/BleToolboxApp.hpp"
 #include "ScreenCaptureApp.hpp"
+#include "sd_share.h"
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::gui;
@@ -557,6 +558,16 @@ extern "C" void app_main(void)
 
         auto app1 = esp_brookesia::apps::SpecAnalyzer::requestInstance();
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(app1), "Start SpecAnalyzer failed");
+    }
+
+    /* Bring the SD card up and hand its mount to esp_tinyusb BEFORE any app's init() runs,
+     * so VideoPlayer and screen_capture find /sdcard already mounted by esp_tinyusb. USB
+     * sharing is armed here too. */
+    {
+        esp_err_t share_err = sd_share_start();
+        if (share_err != ESP_OK) {
+            ESP_LOGW("Main", "SD card sharing unavailable: %s", esp_err_to_name(share_err));
+        }
     }
 
     refresh_boot_loading(boot_loading, "Loading media...", 82);
