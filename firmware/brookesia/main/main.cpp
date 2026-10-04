@@ -39,6 +39,7 @@
 #include "XiaozhiApp.hpp"
 #include "toolbox/ToolboxApp.hpp"
 #include "bletoolbox/BleToolboxApp.hpp"
+#include "ScreenCaptureApp.hpp"
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::gui;
@@ -598,6 +599,10 @@ extern "C" void app_main(void)
         // the same ordering reason.
         auto ble_toolbox_app = new BleToolboxApp();
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(ble_toolbox_app), "Start BLE Toolbox failed");
+
+        // Device-wide screenshots and screen recording, saved to the SD card.
+        auto screen_capture_app = new ScreenCaptureApp();
+        ESP_UTILS_CHECK_FALSE_EXIT(phone->installApp(screen_capture_app), "Start Screen Capture failed");
     }
 
     register_wifi_status_events();
