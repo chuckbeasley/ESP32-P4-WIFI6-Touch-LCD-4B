@@ -1100,7 +1100,7 @@ void BleToolboxApp::refreshScan(void)
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *name = lv_label_create(row);
-        lv_label_set_text(name, a->name[0] != '\0' ? a->name : "(no name)");
+        lv_label_set_text(name, a->name[0] != '\0' ? a->name : "No advertised name");
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -8);
 
         lv_obj_t *addr = lv_label_create(row);
