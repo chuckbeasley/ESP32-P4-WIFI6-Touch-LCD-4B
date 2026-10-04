@@ -2,6 +2,12 @@
 # Espressif IoT Development Framework (ESP-IDF) 5.5 Project Minimal Configuration
 #
 CONFIG_IDF_TARGET="esp32p4"
+# Long filenames. Without this the card can only be read through 8.3 aliases, so media
+# copied on from a computer shows up as MYFAVO~1.MP3 rather than by its own name.
+CONFIG_FATFS_LFN_HEAP=y
+# USB device mode with the Mass Storage Class, so the SD card can be presented to a
+# host computer as a removable drive. The DCD stays on its default DMA mode.
+CONFIG_TINYUSB_MSC_ENABLED=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y

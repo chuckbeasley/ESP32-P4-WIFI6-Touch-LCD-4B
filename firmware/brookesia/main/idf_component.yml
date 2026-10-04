@@ -7,3 +7,11 @@ dependencies:
 
   espressif/esp_hosted:
     version: "3.0.9"
+
+  # USB device stack. Used to present the SD card to a host computer as a removable
+  # drive (MSC), so media can be copied on and off without a card reader.
+  # Note: this must be the ESP-IDF wrapper (esp_tinyusb), not the bare espressif/tinyusb
+  # library -- the latter has no Kconfig and expects the application to supply
+  # tusb_config.h, which breaks the build.
+  espressif/esp_tinyusb:
+    version: ">=1.0.0"
