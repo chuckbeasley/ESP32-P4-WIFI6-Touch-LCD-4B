@@ -607,6 +607,10 @@ extern "C" void app_main(void)
 
     register_wifi_status_events();
 
+    // Auto-connect to the previously saved Wi-Fi network at boot (if the user left
+    // Wi-Fi enabled), so NTP can sync the clock and file timestamps are real time.
+    apps::wifi_auto_connect_boot();
+
     {
         LvLockGuard gui_guard;
 

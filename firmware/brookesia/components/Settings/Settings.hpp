@@ -19,6 +19,13 @@ namespace esp_brookesia::apps
 {
 
     /**
+     * @brief Auto-connect to the saved Wi-Fi network at boot (if the user enabled
+     * Wi-Fi), so NTP can sync the clock. Call after Settings::init() has brought
+     * the station up.
+     */
+    esp_err_t wifi_auto_connect_boot(void);
+
+    /**
      * @brief Settings application for displaying a list of options
      *
      */

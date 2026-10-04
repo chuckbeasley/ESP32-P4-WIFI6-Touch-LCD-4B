@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "esp_sntp.h"
 #include "esp_wifi.h"
+#include "nvs.h"
 #include <stdlib.h>
 #include <sys/time.h>
 #include <time.h>
@@ -344,6 +345,37 @@ namespace esp_brookesia::apps
     {
         ESP_UTILS_LOGD("Resume");
         return true;
+    }
+
+    esp_err_t wifi_auto_connect_boot(void)
+    {
+        // The "Wi-Fi enabled" switch persisted by the Wlan page (same keys it writes).
+        nvs_handle_t handle;
+        int32_t enabled = 0;
+        if (nvs_open("storage", NVS_READONLY, &handle) == ESP_OK) {
+            if (nvs_get_i32(handle, "wifi_en", &enabled) != ESP_OK) {
+                enabled = 0;
+            }
+            nvs_close(handle);
+        }
+
+        if (!enabled) {
+            ESP_UTILS_LOGI("Wi-Fi auto-connect is off, skipping");
+            return ESP_OK;
+        }
+
+        ESP_UTILS_LOGI("Wi-Fi auto-connect: starting station and connecting to the saved network");
+        esp_err_t ret = esp_wifi_start();
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+            ESP_UTILS_LOGW("esp_wifi_start failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        ret = esp_wifi_connect();
+        if (ret != ESP_OK) {
+            ESP_UTILS_LOGW("esp_wifi_connect failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        return ESP_OK;
     }
 
     esp_err_t Settings::initWifi()
