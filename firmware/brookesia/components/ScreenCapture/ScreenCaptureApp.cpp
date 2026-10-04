@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <strings.h>
+#include <algorithm>
 
 #include "esp_log.h"
 #include "screen_capture.h"
@@ -18,6 +21,10 @@
 static const char *TAG = "ScreenCapture";
 
 enum { ACT_SHOT = 1, ACT_REC = 2, ACT_VIEW = 3, ACT_BACK = 4 };
+
+/* How far a drag across the viewer has to travel before it counts as a swipe rather
+ * than a tap. */
+static const int VIEWER_SWIPE_MIN_PX = 80;
 
 /* ---- Launcher icon: a display with capture brackets --------------------------
  *
@@ -156,9 +163,14 @@ ScreenCaptureApp::ScreenCaptureApp()
       main_panel_(nullptr),
       viewer_panel_(nullptr),
       viewer_img_(nullptr),
+      viewer_hint_(nullptr),
+      viewer_hint_timer_(nullptr),
       viewer_data_(nullptr),
       viewer_dsc_{},
-      active_screen_(SCREEN_MAIN)
+      active_screen_(SCREEN_MAIN),
+      viewer_index_(0),
+      viewer_press_x_(0),
+      viewer_press_valid_(false)
 {
 }
 
@@ -267,6 +279,7 @@ bool ScreenCaptureApp::run(void)
     lv_obj_set_style_pad_all(viewer_panel_, 20, 0);
     lv_obj_set_style_pad_row(viewer_panel_, 12, 0);
     lv_obj_set_style_border_width(viewer_panel_, 0, 0);
+    lv_obj_clear_flag(viewer_panel_, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *v_header = lv_obj_create(viewer_panel_);
     lv_obj_set_width(v_header, LV_PCT(100));
@@ -277,8 +290,38 @@ bool ScreenCaptureApp::run(void)
     make_back_button(v_header);
     make_title(v_header, "Capture");
 
+    /* Let the image take whatever the header leaves, and let CONTAIN scale the shot into
+     * it: a capture should use the whole screen rather than sit at its stored size. */
     viewer_img_ = lv_image_create(viewer_panel_);
-    lv_obj_align(viewer_img_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_width(viewer_img_, LV_PCT(100));
+    lv_obj_set_flex_grow(viewer_img_, 1);
+    lv_image_set_inner_align(viewer_img_, LV_IMAGE_ALIGN_CONTAIN);
+    /* Swiping the picture moves through the folder. The object has to be clickable to see
+     * press and release at all, and must not scroll: if it does, LVGL takes the drag for
+     * a scroll and the release never arrives as a swipe. */
+    lv_obj_clear_flag(viewer_img_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(viewer_img_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(viewer_img_, onViewerPressed, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(viewer_img_, onViewerReleased, LV_EVENT_RELEASED, nullptr);
+
+    /* The "Beginning of list" hint floats over the picture instead of taking a slot in
+     * the flex column, which would resize the image every time it appeared. */
+    viewer_hint_ = lv_label_create(viewer_panel_);
+    lv_obj_add_flag(viewer_hint_, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_align(viewer_hint_, LV_ALIGN_BOTTOM_MID, 0, -8);
+    /* The Screen Capture accent, solid. The old chip reused the grey of the list
+     * separators, which disappeared against a screenshot. */
+    lv_obj_set_style_bg_color(viewer_hint_, lv_color_hex(0x149E8C), 0);
+    lv_obj_set_style_bg_opa(viewer_hint_, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(viewer_hint_, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_radius(viewer_hint_, 12, 0);
+    lv_obj_set_style_pad_hor(viewer_hint_, 18, 0);
+    lv_obj_set_style_pad_ver(viewer_hint_, 10, 0);
+    lv_obj_set_style_text_font(viewer_hint_, &lv_font_montserrat_20, 0);
+    lv_obj_add_flag(viewer_hint_, LV_OBJ_FLAG_HIDDEN);
+
+    viewer_hint_timer_ = lv_timer_create(onViewerHintTimeout, 1600, this);
+    lv_timer_pause(viewer_hint_timer_);
 
     /* Bring the SD card and encoder up; show the outcome in the status line. */
     esp_err_t err = screen_capture_init();
@@ -319,6 +362,10 @@ bool ScreenCaptureApp::close(void)
         lv_timer_delete(ui_timer_);
         ui_timer_ = nullptr;
     }
+    if (viewer_hint_timer_ != nullptr) {
+        lv_timer_delete(viewer_hint_timer_);
+        viewer_hint_timer_ = nullptr;
+    }
     free(viewer_data_);
     viewer_data_ = nullptr;
     viewer_dsc_.data = nullptr;
@@ -328,6 +375,10 @@ bool ScreenCaptureApp::close(void)
     main_panel_ = nullptr;
     viewer_panel_ = nullptr;
     viewer_img_ = nullptr;
+    viewer_hint_ = nullptr;
+    viewer_list_.clear();
+    viewer_index_ = 0;
+    viewer_press_valid_ = false;
     return true;
 }
 
@@ -350,6 +401,109 @@ void ScreenCaptureApp::openViewer(const char *path)
     if (viewer_img_ == nullptr || path == nullptr) {
         return;
     }
+
+    buildViewerList(path);
+    showViewerIndex();
+}
+
+/* Everything the picked file's folder holds, in name order, so a swipe means "the next
+ * capture" rather than "reopen the picker". FATFS returns uppercase 8.3 names with long
+ * filenames off, hence the case-insensitive suffix check. */
+void ScreenCaptureApp::buildViewerList(const char *picked)
+{
+    viewer_list_.clear();
+    viewer_index_ = 0;
+
+    const std::string path(picked);
+    const size_t slash = path.find_last_of('/');
+    if (slash == std::string::npos || slash == 0) {
+        viewer_list_.push_back(path);
+        return;
+    }
+
+    const std::string dir = path.substr(0, slash);
+    DIR *d = opendir(dir.c_str());
+    if (d != nullptr) {
+        struct dirent *e;
+        while ((e = readdir(d)) != nullptr) {
+            const size_t n = strlen(e->d_name);
+            if (n > 4 && strcasecmp(e->d_name + n - 4, ".png") == 0) {
+                viewer_list_.push_back(dir + "/" + e->d_name);
+            }
+        }
+        closedir(d);
+    }
+
+    if (viewer_list_.empty()) {
+        viewer_list_.push_back(path);
+        return;
+    }
+
+    std::sort(viewer_list_.begin(), viewer_list_.end());
+    for (size_t i = 0; i < viewer_list_.size(); i++) {
+        if (viewer_list_[i] == path) {
+            viewer_index_ = i;
+            break;
+        }
+    }
+}
+
+void ScreenCaptureApp::stepViewer(int delta)
+{
+    if (viewer_list_.empty()) {
+        return;
+    }
+
+    /* The ends stop rather than wrap, and say so: a swipe that appears to do nothing
+     * otherwise reads as a missed gesture. */
+    const int next = (int)viewer_index_ + delta;
+    if (next < 0) {
+        showViewerHint("Beginning of list");
+        return;
+    }
+    if (next >= (int)viewer_list_.size()) {
+        showViewerHint("End of list");
+        return;
+    }
+
+    viewer_index_ = (size_t)next;
+    showViewerIndex();
+}
+
+void ScreenCaptureApp::showViewerHint(const char *text)
+{
+    if (viewer_hint_ == nullptr || viewer_hint_timer_ == nullptr) {
+        return;
+    }
+
+    lv_label_set_text(viewer_hint_, text);
+    lv_obj_clear_flag(viewer_hint_, LV_OBJ_FLAG_HIDDEN);
+
+    /* Restart the dismissal window from now, so swiping at the end again holds the
+     * message up instead of letting the first swipe's timer cut it short. */
+    lv_timer_reset(viewer_hint_timer_);
+    lv_timer_resume(viewer_hint_timer_);
+}
+
+void ScreenCaptureApp::onViewerHintTimeout(lv_timer_t *t)
+{
+    ScreenCaptureApp *app = (ScreenCaptureApp *)lv_timer_get_user_data(t);
+    if (app != nullptr && app->viewer_hint_ != nullptr) {
+        lv_obj_add_flag(app->viewer_hint_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* One-shot in effect, but kept alive and paused: a repeat_count of 1 makes LVGL
+     * delete the timer, which would leave the member dangling. */
+    lv_timer_pause(t);
+}
+
+void ScreenCaptureApp::showViewerIndex(void)
+{
+    if (viewer_img_ == nullptr || viewer_list_.empty()) {
+        return;
+    }
+
+    const char *path = viewer_list_[viewer_index_].c_str();
 
     FILE *f = fopen(path, "rb");
     if (f == nullptr) {
@@ -397,9 +551,9 @@ void ScreenCaptureApp::openViewer(const char *path)
     viewer_dsc_.data_size = (uint32_t)(w * h * 2);
     viewer_dsc_.data = rgb565;
 
+    /* No manual sizing: the widget is laid out by the viewer's flex column and CONTAIN
+     * scales the image to fill it, keeping the aspect ratio. */
     lv_image_set_src(viewer_img_, &viewer_dsc_);
-    lv_obj_set_size(viewer_img_, w, h);
-    lv_obj_center(viewer_img_);
 
     showScreen(SCREEN_VIEWER);
 }
@@ -476,6 +630,46 @@ void ScreenCaptureApp::onFilePickCancelled(const char *path, void *user)
     (void)path;
     (void)user;
     /* Nothing to undo: the picker covered the app, which is still where it was. */
+}
+
+/* Swipe detection is done on press/release rather than with LVGL's gesture events, which
+ * this build has compiled out (LV_USE_GESTURE_RECOGNITION is off). */
+void ScreenCaptureApp::onViewerPressed(lv_event_t *e)
+{
+    (void)e;
+    ScreenCaptureApp *app = g_app;
+    lv_indev_t *indev = lv_indev_active();
+    if (app == nullptr || indev == nullptr) {
+        return;
+    }
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    app->viewer_press_x_ = p.x;
+    app->viewer_press_valid_ = true;
+}
+
+void ScreenCaptureApp::onViewerReleased(lv_event_t *e)
+{
+    (void)e;
+    ScreenCaptureApp *app = g_app;
+    lv_indev_t *indev = lv_indev_active();
+    if (app == nullptr || indev == nullptr || !app->viewer_press_valid_) {
+        return;
+    }
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    const int dx = p.x - app->viewer_press_x_;
+    app->viewer_press_valid_ = false;
+
+    /* Standard gallery behaviour: dragging left advances to the next capture, as if the
+     * picture were being pushed off to the left, and dragging right goes back. */
+    if (dx <= -VIEWER_SWIPE_MIN_PX) {
+        app->stepViewer(+1);
+    } else if (dx >= VIEWER_SWIPE_MIN_PX) {
+        app->stepViewer(-1);
+    }
 }
 
 void ScreenCaptureApp::onTick(lv_timer_t *t)

@@ -7,6 +7,9 @@
  */
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "lvgl.h"
 #include "esp_brookesia.hpp"
 
@@ -26,6 +29,9 @@ public:
     static void onTick(lv_timer_t *t);
     static void onFilePicked(const char *path, void *user);
     static void onFilePickCancelled(const char *path, void *user);
+    static void onViewerPressed(lv_event_t *e);
+    static void onViewerReleased(lv_event_t *e);
+    static void onViewerHintTimeout(lv_timer_t *t);
 
 private:
     enum Screen { SCREEN_MAIN = 0, SCREEN_VIEWER = 1 };
@@ -35,6 +41,13 @@ private:
     void openViewer(const char *path);
     void closeViewer(void);
 
+    /* The viewer walks the folder the picked file came from, so a swipe means "the next
+     * capture", not "reopen the picker". */
+    void buildViewerList(const char *picked);
+    void showViewerIndex(void);
+    void stepViewer(int delta);
+    void showViewerHint(const char *text);
+
     lv_obj_t  *status_label_;
     lv_obj_t  *rec_label_;
     lv_timer_t *ui_timer_;
@@ -42,8 +55,15 @@ private:
     lv_obj_t  *main_panel_;
     lv_obj_t  *viewer_panel_;
     lv_obj_t  *viewer_img_;
+    lv_obj_t  *viewer_hint_;
+    lv_timer_t *viewer_hint_timer_;
 
     uint8_t   *viewer_data_;
     lv_image_dsc_t viewer_dsc_;
     Screen    active_screen_;
+
+    std::vector<std::string> viewer_list_;
+    size_t    viewer_index_;
+    int       viewer_press_x_;
+    bool      viewer_press_valid_;
 };
