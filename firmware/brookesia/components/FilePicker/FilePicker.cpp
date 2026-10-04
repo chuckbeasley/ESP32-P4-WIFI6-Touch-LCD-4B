@@ -15,6 +15,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -32,6 +33,7 @@ struct Entry {
     std::string path;   /* full path, as the filesystem returned it */
     bool is_dir;
     long size;
+    time_t mtime;       /* 0 when the filesystem would not tell us */
 };
 
 struct State {
@@ -130,6 +132,7 @@ void navigate(const std::string &dir)
         ent.name = e->d_name;
         ent.path = dir + "/" + e->d_name;
         ent.size = 0;
+        ent.mtime = 0;
 
         if (e->d_type == DT_DIR) {
             ent.is_dir = true;
@@ -151,6 +154,7 @@ void navigate(const std::string &dir)
         struct stat st;
         if (!ent.is_dir && stat(ent.path.c_str(), &st) == 0) {
             ent.size = (long)st.st_size;
+            ent.mtime = st.st_mtime;
         }
 
         ent.name = lower(ent.name);
@@ -227,13 +231,18 @@ void on_cancel_click(lv_event_t *e)
     }
 }
 
+/* Sized for finger input: this is a touch screen, and the theme's defaults are easy to
+ * miss. Both the header controls and the list rows are tuned here so they stay in step. */
+#define FILE_PICKER_HEADER_BTN 64
+#define FILE_PICKER_ROW_H      60
+
 lv_obj_t *make_row(lv_obj_t *parent, const char *icon, const std::string &label,
-                   const char *trailing, int index)
+                   const char *date, const char *size, int index)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, 46);
+    lv_obj_set_height(row, FILE_PICKER_ROW_H);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_hor(row, 12, 0);
@@ -254,18 +263,26 @@ lv_obj_t *make_row(lv_obj_t *parent, const char *icon, const std::string &label,
     lv_obj_set_flex_grow(lbl, 1);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
 
-    if (trailing != nullptr) {
-        lv_obj_t *tr = lv_label_create(row);
-        lv_label_set_text(tr, trailing);
-        lv_obj_set_style_text_color(tr, lv_color_hex(0x7d8a97), 0);
+    /* Timestamp and size sit in fixed-width columns so they line up down the list
+     * whatever the values are. Directories carry neither. */
+    if (date != nullptr && date[0] != '\0') {
+        lv_obj_t *dt = lv_label_create(row);
+        lv_label_set_text(dt, date);
+        lv_obj_set_width(dt, 150);      /* fits YYYY-MM-DD HH:MM */
+        lv_label_set_long_mode(dt, LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_style_text_color(dt, lv_color_hex(0x7d8a97), 0);
+    }
+
+    if (size != nullptr) {
+        lv_obj_t *sz = lv_label_create(row);
+        lv_label_set_text(sz, size);
+        lv_obj_set_width(sz, 80);
+        lv_label_set_long_mode(sz, LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_style_text_color(sz, lv_color_hex(0x7d8a97), 0);
     }
 
     return row;
 }
-
-/* Header controls are deliberately large: this is a finger-driven touch screen, and the
- * theme's default button is easy to miss next to the list. */
-#define FILE_PICKER_HEADER_BTN 64
 
 lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
 {
@@ -299,11 +316,26 @@ void rebuild_list(void)
     for (size_t i = 0; i < s.entries.size(); i++) {
         const Entry &ent = s.entries[i];
         if (ent.is_dir) {
-            make_row(s.list, LV_SYMBOL_DIRECTORY, ent.name, nullptr, (int)i);
-        } else {
-            const std::string size = human_size(ent.size);
-            make_row(s.list, LV_SYMBOL_FILE, ent.name, size.c_str(), (int)i);
+            make_row(s.list, LV_SYMBOL_DIRECTORY, ent.name, nullptr, nullptr, (int)i);
+            continue;
         }
+
+        /* The stamp shown is the file's own, read straight out of the FAT directory
+         * entry via stat() — nothing here is the device's current clock.
+         *
+         * The year is always printed. A file written before SNTP set the clock cannot
+         * have a usable stamp: FAT has no representation before 1980, so FatFs clamps
+         * it and the entry lands on 1980-01-01. Without the year that reads as a
+         * plausible recent date rather than as the unset clock it actually is. */
+        char datebuf[28] = "";
+        if (ent.mtime != 0) {
+            struct tm tmv;
+            localtime_r(&ent.mtime, &tmv);
+            strftime(datebuf, sizeof(datebuf), "%Y-%m-%d %H:%M", &tmv);
+        }
+
+        const std::string size = human_size(ent.size);
+        make_row(s.list, LV_SYMBOL_FILE, ent.name, datebuf, size.c_str(), (int)i);
     }
 }
 
