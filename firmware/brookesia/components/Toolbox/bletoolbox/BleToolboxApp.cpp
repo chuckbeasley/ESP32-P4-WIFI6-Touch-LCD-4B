@@ -434,6 +434,7 @@ BleToolboxApp::BleToolboxApp():
     passkey_modal(nullptr),
     passkey_value(nullptr),
     list_dirty(false),
+    last_list_rebuild_ms(0),
     auto_discover_chars(false),
     auto_subscribe(false)
 {
@@ -1585,7 +1586,17 @@ void BleToolboxApp::onTick(lv_timer_t *timer)
     if (!app->list_dirty) {
         return;
     }
+
+    /* Rebuilding a screen tears down and recreates every row object; at 10 Hz a busy
+     * scan would churn LVGL faster than scrolling can keep up. Throttle the rebuild to
+     * every 250 ms. list_dirty stays set, so a later tick that is far enough past the
+     * last rebuild does the work. */
+    const uint32_t now = lv_tick_get();
+    if (now - app->last_list_rebuild_ms < 250) {
+        return;
+    }
     app->list_dirty = false;
+    app->last_list_rebuild_ms = now;
 
     switch (app->active_screen) {
     case SCREEN_SCAN:

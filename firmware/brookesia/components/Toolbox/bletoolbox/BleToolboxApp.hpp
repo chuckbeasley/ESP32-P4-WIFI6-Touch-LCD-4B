@@ -267,6 +267,8 @@ private:
 
     /* Set by the callbacks, cleared by the timer. */
     volatile bool list_dirty;
+    /* lv_tick_get() at the last full-list rebuild, to throttle it while scanning. */
+    uint32_t last_list_rebuild_ms;
     /* Auto-subscribe is driven from the timer (not NimBLE's task) so the GATT client
      * operations run on the app's own task, the same as the manual Subscribe button. */
     volatile bool auto_discover_chars;
