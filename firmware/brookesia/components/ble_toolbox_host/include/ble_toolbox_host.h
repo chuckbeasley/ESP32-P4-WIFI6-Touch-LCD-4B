@@ -48,6 +48,8 @@ typedef struct {
                                     * AD field, little-endian; 0 when the advert has none */
     uint16_t service_uuid;         /* first 16-bit service UUID in the AD, 0 when none */
     uint16_t appearance;           /* GAP appearance value, 0 when none */
+    uint8_t  kind;                 /* ble_toolbox_adv_kind_t, decoded from the payload */
+    uint32_t fastpair_model_id;    /* Fast Pair model ID when kind == BLE_ADV_FAST_PAIR */
 } ble_toolbox_adv_t;
 
 /* A raw advertisement, for the observer screen. Unlike the listing above this keeps
@@ -56,6 +58,7 @@ typedef struct {
     uint8_t  addr[6];
     char     addr_str[18];
     int8_t   rssi;
+    char     name[32];             /* the local name, empty when absent */
     uint8_t  adv_type;             /* the controller's event type */
     uint8_t  data[64];             /* the AD structures, as received */
     uint8_t  data_len;

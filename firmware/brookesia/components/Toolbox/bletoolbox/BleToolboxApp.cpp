@@ -329,6 +329,40 @@ static void ident_detail(const char *addr_str, uint16_t company_id,
     }
 }
 
+/* Build the top line for a BLE row: the device name, the decoded payload kind when the
+ * name is absent, or both ("name - kind") when the payload identified something specific. */
+static void ident_top(const char *name, ble_toolbox_adv_kind_t kind, uint32_t model_id,
+                      char *out, size_t n)
+{
+    char kind_buf[72];
+    const bool have_kind = (kind != BLE_ADV_UNKNOWN);
+    const bool have_name = (name != NULL && name[0] != '\0');
+
+    if (have_kind) {
+        if (kind == BLE_ADV_FAST_PAIR) {
+            const char *model = vendor_lookup_fastpair(model_id);
+            if (model != NULL) {
+                snprintf(kind_buf, sizeof(kind_buf), "Fast Pair - %s", model);
+            } else {
+                snprintf(kind_buf, sizeof(kind_buf), "Fast Pair 0x%06lX",
+                         (unsigned long)model_id);
+            }
+        } else {
+            snprintf(kind_buf, sizeof(kind_buf), "%s", ble_toolbox_adv_kind_name(kind));
+        }
+    }
+
+    if (have_name && have_kind) {
+        snprintf(out, n, "%s - %s", name, kind_buf);
+    } else if (have_name) {
+        snprintf(out, n, "%s", name);
+    } else if (have_kind) {
+        snprintf(out, n, "%s", kind_buf);
+    } else {
+        snprintf(out, n, "No advertised name");
+    }
+}
+
 /* ---- Proximity radar geometry -------------------------------------------- */
 
 #define RADAR_MAX_DIST_M    10.0f   /* outer ring */
@@ -1123,7 +1157,10 @@ void BleToolboxApp::refreshScan(void)
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *name = lv_label_create(row);
-        lv_label_set_text(name, a->name[0] != '\0' ? a->name : "No advertised name");
+        char name_text[96];
+        ident_top(a->name, (ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id,
+                  name_text, sizeof(name_text));
+        lv_label_set_text(name, name_text);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -8);
 
         lv_obj_t *addr = lv_label_create(row);
@@ -1354,19 +1391,9 @@ void BleToolboxApp::refreshObserver(void)
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
             lv_obj_t *kind = lv_label_create(row);
-            char kind_text[80];
-            if (e->info.kind == BLE_ADV_FAST_PAIR) {
-                const char *model = vendor_lookup_fastpair(e->info.fastpair_model_id);
-                if (model != NULL) {
-                    snprintf(kind_text, sizeof(kind_text), "Fast Pair - %s", model);
-                } else {
-                    snprintf(kind_text, sizeof(kind_text), "Fast Pair 0x%06lX",
-                             (unsigned long)e->info.fastpair_model_id);
-                }
-            } else {
-                snprintf(kind_text, sizeof(kind_text), "%s",
-                         ble_toolbox_adv_kind_name(e->info.kind));
-            }
+            char kind_text[96];
+            ident_top(e->raw.name, e->info.kind, e->info.fastpair_model_id,
+                      kind_text, sizeof(kind_text));
             lv_label_set_text(kind, kind_text);
             lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -8);
 

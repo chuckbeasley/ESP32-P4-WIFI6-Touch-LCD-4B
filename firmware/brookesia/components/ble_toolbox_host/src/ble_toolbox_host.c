@@ -196,6 +196,10 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.company_id = id.company_id;
             adv.service_uuid = id.service_uuid;
             adv.appearance = id.appearance;
+            ble_toolbox_adv_info_t info;
+            ble_toolbox_adv_decode(d->data, d->length_data, &info);
+            adv.kind = (uint8_t)info.kind;
+            adv.fastpair_model_id = info.fastpair_model_id;
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&
@@ -228,6 +232,14 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             raw.company_id = id.company_id;
             raw.service_uuid = id.service_uuid;
             raw.appearance = id.appearance;
+            struct ble_hs_adv_fields raw_fields;
+            if (ble_hs_adv_parse_fields(&raw_fields, d->data, d->length_data) == 0 &&
+                raw_fields.name != NULL && raw_fields.name_len > 0) {
+                const size_t n = (raw_fields.name_len < sizeof(raw.name) - 1)
+                                 ? raw_fields.name_len : sizeof(raw.name) - 1;
+                memcpy(raw.name, raw_fields.name, n);
+                raw.name[n] = '\0';
+            }
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);
@@ -261,6 +273,10 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.company_id = id.company_id;
             adv.service_uuid = id.service_uuid;
             adv.appearance = id.appearance;
+            ble_toolbox_adv_info_t info;
+            ble_toolbox_adv_decode(d->data, d->length_data, &info);
+            adv.kind = (uint8_t)info.kind;
+            adv.fastpair_model_id = info.fastpair_model_id;
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&
@@ -291,6 +307,14 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             raw.company_id = id.company_id;
             raw.service_uuid = id.service_uuid;
             raw.appearance = id.appearance;
+            struct ble_hs_adv_fields raw_fields;
+            if (ble_hs_adv_parse_fields(&raw_fields, d->data, d->length_data) == 0 &&
+                raw_fields.name != NULL && raw_fields.name_len > 0) {
+                const size_t n = (raw_fields.name_len < sizeof(raw.name) - 1)
+                                 ? raw_fields.name_len : sizeof(raw.name) - 1;
+                memcpy(raw.name, raw_fields.name, n);
+                raw.name[n] = '\0';
+            }
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);
