@@ -1161,10 +1161,9 @@ void BleToolboxApp::updateStatus(void)
     }
 
     char text[96];
-    snprintf(text, sizeof(text), "%s  -  %s  -  %lu adv",
+    snprintf(text, sizeof(text), "%s  -  %s",
              service_up ? "BLE ready" : "BLE down",
-             scanning ? "scanning" : "idle",
-             (unsigned long)scan_total);
+             scanning ? "scanning" : "idle");
     lv_label_set_text(status_label, text);
 
     /* The Scan screen's state line doubles as the connection readout. connectTo()
@@ -1764,25 +1763,18 @@ void BleToolboxApp::buildMenu(void)
     /* Only three entries without the transmit path, four with it. The entry appears
      * because the capability was compiled in, not because a flag hides a button — which
      * is the distinction spec section 10.5 draws for the Wi-Fi toolbox's injection. */
-    static const char *entries[5] = {
-        "BLE Scan",
-        "Proximity Radar",
-        "BLE Observer",
-        "AirTag Monitor",
 #if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
-        "BLE Spam",
+    static const char *entries[5] = { "BLE Scan", "BLE Observer", "BLE Spam",
+                                      "BLE Proximity Radar", "AirTag Monitor" };
+    static const int codes[5] = { ACT_MENU_SCAN, ACT_MENU_OBSERVER, ACT_MENU_SPAM,
+                                  ACT_MENU_RADAR, ACT_MENU_AIRTAG };
+    const int entry_count = 5;
 #else
-        "",
-#endif
-    };
-    static const int codes[5] = { ACT_MENU_SCAN, ACT_MENU_RADAR, ACT_MENU_OBSERVER,
-                                  ACT_MENU_AIRTAG, ACT_MENU_SPAM };
-
-    const int entry_count =
-#if CONFIG_BLE_TOOLBOX_ALLOW_SPAM
-        5;
-#else
-        4;
+    static const char *entries[4] = { "BLE Scan", "BLE Observer",
+                                      "BLE Proximity Radar", "AirTag Monitor" };
+    static const int codes[4] = { ACT_MENU_SCAN, ACT_MENU_OBSERVER,
+                                  ACT_MENU_RADAR, ACT_MENU_AIRTAG };
+    const int entry_count = 4;
 #endif
 
     /* Menu entries are the app's navigation and carry a font of their own rather than the
@@ -1990,7 +1982,7 @@ void BleToolboxApp::buildObserver(void)
 void BleToolboxApp::buildRadar(void)
 {
     lv_area_t area = getVisualArea();
-    lv_obj_t *panel = toolbox_make_screen(screens[SCREEN_RADAR], area, "Proximity Radar",
+    lv_obj_t *panel = toolbox_make_screen(screens[SCREEN_RADAR], area, "BLE Proximity Radar",
                                           LV_SYMBOL_LEFT, onEvent, (void *)(intptr_t)ACT_BACK);
 
     /* The radar circle fills whatever the flex column leaves after the header and the
