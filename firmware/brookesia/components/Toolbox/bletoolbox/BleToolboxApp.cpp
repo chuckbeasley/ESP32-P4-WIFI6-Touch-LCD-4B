@@ -1705,6 +1705,13 @@ void BleToolboxApp::showScreen(Screen screen)
 {
     active_screen = screen;
 
+    /* Returning to the menu means no screen is looking at a scan anymore, so stop it
+     * instead of letting the host's resume loop keep re-running it in the background. */
+    if (screen == SCREEN_MENU && scanning) {
+        (void)ble_toolbox_host_scan_stop();
+        scanning = false;
+    }
+
     for (int i = 0; i < SCREEN_COUNT; i++) {
         if (screens[i] == nullptr) {
             continue;
