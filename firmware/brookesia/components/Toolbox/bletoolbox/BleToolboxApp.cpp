@@ -307,59 +307,40 @@ static BleToolboxApp *g_app = nullptr;
 #define ACT_CONN_WRITE      603
 #define ACT_CONN_SUBSCRIBE  604
 
-/* Build the detail line for a BLE row: "addr - vendor (service-or-appearance)", omitting
- * whatever is unknown. The service UUID is preferred over appearance when both exist. */
-static void ident_detail(const char *addr_str, uint16_t company_id,
-                         uint16_t service_uuid, uint16_t appearance,
-                         char *out, size_t n)
+/* Decoded payload kind, always non-empty: "advert" for an undecoded payload. */
+static void kind_text(ble_toolbox_adv_kind_t kind, uint32_t model_id, char *out, size_t n)
 {
-    const char *vendor = vendor_lookup_company(company_id);
-    const char *service = vendor_lookup_service(service_uuid);
-    const char *appearance_name = vendor_lookup_appearance(appearance);
-    const char *type = service ? service : appearance_name;
-
-    if (vendor != NULL && type != NULL) {
-        snprintf(out, n, "%s  -  %s (%s)", addr_str, vendor, type);
-    } else if (vendor != NULL) {
-        snprintf(out, n, "%s  -  %s", addr_str, vendor);
-    } else if (type != NULL) {
-        snprintf(out, n, "%s  -  %s", addr_str, type);
+    if (kind == BLE_ADV_FAST_PAIR) {
+        const char *model = vendor_lookup_fastpair(model_id);
+        if (model != NULL) {
+            snprintf(out, n, "Fast Pair - %s", model);
+        } else {
+            snprintf(out, n, "Fast Pair 0x%06lX", (unsigned long)model_id);
+        }
     } else {
-        snprintf(out, n, "%s", addr_str);
+        snprintf(out, n, "%s", ble_toolbox_adv_kind_name(kind));
     }
 }
 
-/* Build the top line for a BLE row: the device name, the decoded payload kind when the
- * name is absent, or both ("name - kind") when the payload identified something specific. */
-static void ident_top(const char *name, ble_toolbox_adv_kind_t kind, uint32_t model_id,
-                      char *out, size_t n)
+/* Vendor and device class ("vendor - type") with a stable "unknown" fallback so the
+ * line always has a value and never shifts position. */
+static void ident_vendor_type(uint16_t company_id, uint16_t service_uuid,
+                              uint16_t appearance, char *out, size_t n)
 {
-    char kind_buf[72];
-    const bool have_kind = (kind != BLE_ADV_UNKNOWN);
-    const bool have_name = (name != NULL && name[0] != '\0');
-
-    if (have_kind) {
-        if (kind == BLE_ADV_FAST_PAIR) {
-            const char *model = vendor_lookup_fastpair(model_id);
-            if (model != NULL) {
-                snprintf(kind_buf, sizeof(kind_buf), "Fast Pair - %s", model);
-            } else {
-                snprintf(kind_buf, sizeof(kind_buf), "Fast Pair 0x%06lX",
-                         (unsigned long)model_id);
-            }
-        } else {
-            snprintf(kind_buf, sizeof(kind_buf), "%s", ble_toolbox_adv_kind_name(kind));
-        }
+    const char *vendor = vendor_lookup_company(company_id);
+    const char *type = vendor_lookup_service(service_uuid);
+    if (type == NULL) {
+        type = vendor_lookup_appearance(appearance);
     }
 
-    if (have_name && have_kind) {
-        snprintf(out, n, "%s - %s", name, kind_buf);
-    } else if (have_name) {
-        snprintf(out, n, "%s", name);
-    } else if (have_kind) {
-        snprintf(out, n, "%s", kind_buf);
+    if (vendor != NULL && type != NULL) {
+        snprintf(out, n, "%s - %s", vendor, type);
+    } else if (vendor != NULL) {
+        snprintf(out, n, "%s", vendor);
+    } else if (type != NULL) {
+        snprintf(out, n, "%s", type);
     } else {
-        snprintf(out, n, "No advertised name");
+        snprintf(out, n, "unknown");
     }
 }
 
@@ -1153,23 +1134,33 @@ void BleToolboxApp::refreshScan(void)
 
         lv_obj_t *row = lv_obj_create(scan_list);
         lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, 64);
+        lv_obj_set_height(row, 96);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *name = lv_label_create(row);
-        char name_text[96];
-        ident_top(a->name, (ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id,
-                  name_text, sizeof(name_text));
-        lv_label_set_text(name, name_text);
-        lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -8);
+        lv_label_set_text(name, a->name[0] != '\0' ? a->name : "No advertised name");
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -32);
+
+        lv_obj_t *kind = lv_label_create(row);
+        lv_obj_set_style_text_font(kind, TOOLBOX_FONT_DETAIL, 0);
+        char kind_buf[80];
+        kind_text((ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id, kind_buf,
+                  sizeof(kind_buf));
+        lv_label_set_text(kind, kind_buf);
+        lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -11);
+
+        lv_obj_t *vt = lv_label_create(row);
+        lv_obj_set_style_text_font(vt, TOOLBOX_FONT_DETAIL, 0);
+        char vt_buf[96];
+        ident_vendor_type(a->company_id, a->service_uuid, a->appearance, vt_buf,
+                          sizeof(vt_buf));
+        lv_label_set_text(vt, vt_buf);
+        lv_obj_align(vt, LV_ALIGN_LEFT_MID, 0, 10);
 
         lv_obj_t *addr = lv_label_create(row);
         lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-        char addr_text[96];
-        ident_detail(a->addr_str, a->company_id, a->service_uuid, a->appearance,
-                     addr_text, sizeof(addr_text));
-        lv_label_set_text(addr, addr_text);
-        lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
+        lv_label_set_text(addr, a->addr_str);
+        lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 31);
 
         /* The Connect button is the action; the row itself is not clickable. It
          * doubles as Disconnect once this device is the connected one. */
@@ -1387,23 +1378,32 @@ void BleToolboxApp::refreshObserver(void)
 
             lv_obj_t *row = lv_obj_create(obs_log);
             lv_obj_set_width(row, LV_PCT(100));
-            lv_obj_set_height(row, 52);
+            lv_obj_set_height(row, 96);
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
+            lv_obj_t *name = lv_label_create(row);
+            lv_label_set_text(name, e->raw.name[0] != '\0' ? e->raw.name : "No advertised name");
+            lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -32);
+
             lv_obj_t *kind = lv_label_create(row);
-            char kind_text[96];
-            ident_top(e->raw.name, e->info.kind, e->info.fastpair_model_id,
-                      kind_text, sizeof(kind_text));
-            lv_label_set_text(kind, kind_text);
-            lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -8);
+            lv_obj_set_style_text_font(kind, TOOLBOX_FONT_DETAIL, 0);
+            char kind_buf[80];
+            kind_text(e->info.kind, e->info.fastpair_model_id, kind_buf, sizeof(kind_buf));
+            lv_label_set_text(kind, kind_buf);
+            lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -11);
+
+            lv_obj_t *vt = lv_label_create(row);
+            lv_obj_set_style_text_font(vt, TOOLBOX_FONT_DETAIL, 0);
+            char vt_buf[96];
+            ident_vendor_type(e->raw.company_id, e->raw.service_uuid, e->raw.appearance,
+                              vt_buf, sizeof(vt_buf));
+            lv_label_set_text(vt, vt_buf);
+            lv_obj_align(vt, LV_ALIGN_LEFT_MID, 0, 10);
 
             lv_obj_t *addr = lv_label_create(row);
             lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-            char addr_text[96];
-            ident_detail(e->raw.addr_str, e->raw.company_id, e->raw.service_uuid,
-                         e->raw.appearance, addr_text, sizeof(addr_text));
-            lv_label_set_text(addr, addr_text);
-            lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
+            lv_label_set_text(addr, e->raw.addr_str);
+            lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 31);
 
             lv_obj_t *rssi = lv_label_create(row);
             lv_obj_set_style_text_font(rssi, TOOLBOX_FONT_DETAIL, 0);
