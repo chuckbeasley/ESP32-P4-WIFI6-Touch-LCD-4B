@@ -2778,12 +2778,11 @@ void BleToolboxApp::onEvent(lv_event_t *e)
         p.passive = false;
         p.filter_duplicates = true;
 
-        /* Cleared BEFORE the start, so the first frame of the new run is counted. Clearing
-         * after would drop however many arrived in between.
-         *
-         * Done even if the start then fails: a scan is already running in that case, and
-         * its counts are still the previous run's, so leaving them would be the worse of
-         * the two outcomes either way. */
+        /* A Start is a clean restart, not a resume. Stop any in-flight scan first, then
+         * reset and start fresh: otherwise pressing Start while the previous scan is still
+         * winding down returns "already scanning" and leaves the old run re-filling a
+         * counter that was just reset -- which looks like the count never resets. */
+        (void)ble_toolbox_host_scan_stop();
         app->resetCounters();
 
         const esp_err_t err = ble_toolbox_host_scan_start(&p);
