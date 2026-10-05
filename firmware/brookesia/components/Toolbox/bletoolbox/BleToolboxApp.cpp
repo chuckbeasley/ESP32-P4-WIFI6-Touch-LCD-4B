@@ -743,8 +743,16 @@ void BleToolboxApp::latchRaw(const ble_toolbox_raw_adv_t *raw)
     bool known = false;
     for (int i = 0; i < obs_latch_len; i++) {
         if (memcmp(obs_latch[i].raw.addr, raw->addr, 6) == 0) {
+            /* The name usually arrives in the scan response, not the advertisement.
+             * Preserve a name we already have when the newer frame lacks one, so a
+             * nameless advertisement does not blank out a row that already learned it. */
+            char saved_name[32];
+            snprintf(saved_name, sizeof(saved_name), "%s", obs_latch[i].raw.name);
             obs_latch[i].raw = *raw;
             obs_latch[i].info = info;
+            if (raw->name[0] == '\0' && saved_name[0] != '\0') {
+                snprintf(obs_latch[i].raw.name, sizeof(obs_latch[i].raw.name), "%s", saved_name);
+            }
             known = true;
             break;
         }
