@@ -250,6 +250,9 @@ typedef enum {
     BLE_ADV_APPLE_FINDMY,          /* an offline-finding advert, i.e. AirTag-class */
     BLE_ADV_APPLE_NEARBY,          /* an Apple continuity advert, "Nearby Info" */
     BLE_ADV_SMART_GLASSES,         /* a manufacturer or appearance that suggests them */
+    BLE_ADV_FAST_PAIR,             /* Google Fast Pair provider (service data 0xFE2C) */
+    BLE_ADV_EXPOSURE_NOTIFICATION, /* Apple/Google Exposure Notification (0xFD6F) */
+    BLE_ADV_TILE,                  /* a Tile tracker (manufacturer company ID 0x0157) */
 } ble_toolbox_adv_kind_t;
 
 /* Decoded detail. Only the fields relevant to `kind` are filled. */
@@ -275,6 +278,9 @@ typedef struct {
 
     /* Smart-glasses heuristic: why it was flagged, for the UI to show. */
     const char *reason;
+
+    /* Fast Pair: the 24-bit model ID from a provider advertisement. */
+    uint32_t fastpair_model_id;
 } ble_toolbox_adv_info_t;
 
 /* Decode one advertisement's AD structures. Always succeeds; an advertisement that

@@ -41,6 +41,15 @@
 #define ADV_TYPE_NAME_COMPLETE    0x09
 #define ADV_TYPE_MANUFACTURER     0xFF
 #define ADV_TYPE_APPEARANCE       0x19
+#define ADV_TYPE_SERVICE_DATA_16  0x16
+
+/* 16-bit service-data UUIDs, as carried in a 0x16 field. */
+#define SVC_FAST_PAIR             0xFE2C
+#define SVC_EXPOSURE_NOTIF        0xFD6F
+
+/* Tile's manufacturer company ID, little-endian on the wire. */
+#define MFR_TILE_LOW              0x57
+#define MFR_TILE_HIGH             0x01
 
 /* Eddystone URL scheme prefixes, per the spec. Index is the encoded byte. */
 static const char *const k_eddystone_schemes[] = {
@@ -73,6 +82,9 @@ const char *ble_toolbox_adv_kind_name(ble_toolbox_adv_kind_t kind)
     case BLE_ADV_APPLE_FINDMY:   return "Apple FindMy";
     case BLE_ADV_APPLE_NEARBY:   return "Nearby Info";
     case BLE_ADV_SMART_GLASSES:  return "Eye Glasses";
+    case BLE_ADV_FAST_PAIR:      return "Fast Pair";
+    case BLE_ADV_EXPOSURE_NOTIFICATION: return "Exposure Notification";
+    case BLE_ADV_TILE:           return "Tile";
     default:                     return "advert";
     }
 }
@@ -218,6 +230,31 @@ void ble_toolbox_adv_decode(const uint8_t *data, uint8_t len, ble_toolbox_adv_in
                 if (decode_eddystone(body, body_len, out)) {
                     return;
                 }
+            } else if (body[0] == MFR_TILE_LOW && body[1] == MFR_TILE_HIGH) {
+                /* A Tile tracker advertises under its own manufacturer company ID. */
+                out->kind = BLE_ADV_TILE;
+                return;
+            }
+            break;
+        }
+
+        case ADV_TYPE_SERVICE_DATA_16: {
+            if (body_len < 2) {
+                break;
+            }
+            const uint16_t svc_uuid = (uint16_t)(body[0] | (body[1] << 8));
+            if (svc_uuid == SVC_FAST_PAIR && body_len >= 6) {
+                /* [0x2C 0xFE][model type][3-byte model id] */
+                out->fastpair_model_id = ((uint32_t)body[3] << 16) |
+                                         ((uint32_t)body[4] << 8) |
+                                         (uint32_t)body[5];
+                out->kind = BLE_ADV_FAST_PAIR;
+                return;
+            }
+            if (svc_uuid == SVC_EXPOSURE_NOTIF && body_len >= 18) {
+                /* [0x6F 0xFD][16-byte rolling proximity identifier][4-byte metadata] */
+                out->kind = BLE_ADV_EXPOSURE_NOTIFICATION;
+                return;
             }
             break;
         }
