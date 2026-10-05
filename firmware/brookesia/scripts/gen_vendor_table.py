@@ -27,7 +27,13 @@ def fetch(url: str) -> bytes:
 
 
 def sanitize(s: str) -> str:
-    s = re.sub(r"\s+", " ", s.strip())
+    s = s.strip()
+    # The Bluetooth SIG YAML quotes names that contain commas/colons (e.g.
+    # "name: 'Apple, Inc.'"); the IEEE CSV is already unquoted by csv.reader. Strip
+    # one matching pair of surrounding quotes so the lookups show the bare name.
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        s = s[1:-1].strip()
+    s = re.sub(r"\s+", " ", s)
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
