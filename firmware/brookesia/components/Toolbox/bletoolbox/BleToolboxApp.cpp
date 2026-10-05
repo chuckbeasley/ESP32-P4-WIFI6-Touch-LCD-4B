@@ -761,13 +761,18 @@ void BleToolboxApp::latchRaw(const ble_toolbox_raw_adv_t *raw)
     if (!known) {
         obs_total++;
         if (obs_latch_len < kObsCap) {
+            /* Append new devices to the bottom so first-seen order stays stable. */
+            obs_latch[obs_latch_len].raw = *raw;
+            obs_latch[obs_latch_len].info = info;
             obs_latch_len++;
+        } else {
+            /* Full: drop the oldest entry (top) and append the newest at the bottom. */
+            for (int i = 0; i < kObsCap - 1; i++) {
+                obs_latch[i] = obs_latch[i + 1];
+            }
+            obs_latch[kObsCap - 1].raw = *raw;
+            obs_latch[kObsCap - 1].info = info;
         }
-        for (int i = obs_latch_len - 1; i > 0; i--) {
-            obs_latch[i] = obs_latch[i - 1];
-        }
-        obs_latch[0].raw = *raw;
-        obs_latch[0].info = info;
     }
 
     if (info.kind == BLE_ADV_APPLE_FINDMY) {
@@ -1435,10 +1440,9 @@ void BleToolboxApp::refreshObserver(void)
         }
     }
 
-    /* Newest first, which is what a sniffer is read for: the latch is built newest-to-
-     * oldest, so no reversal is needed here. */
+    /* Oldest first: new advertisers are appended to the bottom, so positions are stable. */
     char count[80];
-    snprintf(count, sizeof(count), "%lu advertisers heard, newest %d shown",
+    snprintf(count, sizeof(count), "%lu advertisers heard, %d shown",
              (unsigned long)obs_total, obs_latch_len);
     lv_label_set_text(obs_count_label, count);
 }
