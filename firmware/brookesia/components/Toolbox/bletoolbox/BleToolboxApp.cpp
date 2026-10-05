@@ -1109,7 +1109,7 @@ void BleToolboxApp::refreshScan(void)
         char addr_text[96];
         const char *vendor = vendor_lookup_company(a->company_id);
         if (vendor != NULL) {
-            snprintf(addr_text, sizeof(addr_text), "%s  \xC2\xB7  %s", a->addr_str, vendor);
+            snprintf(addr_text, sizeof(addr_text), "%s  -  %s", a->addr_str, vendor);
         } else {
             snprintf(addr_text, sizeof(addr_text), "%s", a->addr_str);
         }
