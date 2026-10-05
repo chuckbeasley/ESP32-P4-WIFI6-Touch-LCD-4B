@@ -19,6 +19,7 @@
 #include "toolbox_ui.hpp"
 #include "toolbox_icons.hpp"
 #include "vendor_lookup.h"
+#include "esp_heap_caps.h"
 #include "bsp/esp-bsp.h"
 
 static const char *TAG = "BleToolbox";
@@ -439,6 +440,10 @@ BleToolboxApp::BleToolboxApp():
     auto_subscribe(false)
 {
     memset(screens, 0, sizeof(screens));
+    memset(obs_row, 0, sizeof(obs_row));
+    obs_latch = nullptr;
+    obs_spacer = nullptr;
+    obs_empty = nullptr;
 }
 
 BleToolboxApp::~BleToolboxApp()
@@ -449,6 +454,16 @@ bool BleToolboxApp::init(void)
 {
     ESP_LOGI(TAG, "init");
     g_app = this;
+
+    /* The observer latch lives in PSRAM: kObsCap entries is ~240 KB, too much for
+     * internal RAM next to the LVGL buffers. Allocated once and never realloc'd (a
+     * realloc would race the UI task); it caps at kObsCap and evicts the oldest. */
+    if (obs_latch == nullptr) {
+        obs_latch = (ObsEntry *)heap_caps_malloc(kObsCap * sizeof(ObsEntry), MALLOC_CAP_SPIRAM);
+        if (obs_latch == nullptr) {
+            obs_latch = (ObsEntry *)heap_caps_malloc(kObsCap * sizeof(ObsEntry), MALLOC_CAP_8BIT);
+        }
+    }
 
     /* The launcher icon has to be set here, not in run(). The core builds the home
      * screen during start(), which is after every app's init() but before any app's
@@ -606,6 +621,14 @@ bool BleToolboxApp::close(void)
 
     obs_count_label = nullptr;
     obs_log = nullptr;
+    obs_spacer = nullptr;
+    obs_empty = nullptr;
+    memset(obs_row, 0, sizeof(obs_row));
+    if (obs_latch != nullptr) {
+        heap_caps_free(obs_latch);
+        obs_latch = nullptr;
+    }
+    obs_latch_len = 0;
     obs_start_btn = nullptr;
     obs_stop_btn = nullptr;
 
@@ -1385,60 +1408,65 @@ void BleToolboxApp::refreshConnect(void)
     }
 }
 
-void BleToolboxApp::refreshObserver(void)
+void BleToolboxApp::renderObserverRows(void)
 {
-    if (obs_log == nullptr) {
+    if (obs_log == nullptr || obs_latch == nullptr) {
         return;
     }
 
-    /* Same row layout as the Scan screen: the decoded advertisement kind sits where the Scan
-     * puts the device name (top line), the address is the bottom line, and the RSSI is
-     * right-aligned. The ORDER is deliberately unchanged: the Observer stays newest-first. */
-    lv_obj_clean(obs_log);
+    const int row_h = 96;
+    const int first = lv_obj_get_scroll_y(obs_log) / row_h;
 
-    if (obs_latch_len == 0) {
-        toolbox_make_log_line(obs_log, "nothing heard yet");
-    } else {
-        for (int i = 0; i < obs_latch_len; i++) {
-            const ObsEntry *e = &obs_latch[i];
+    for (int j = 0; j < kObsRowPool; j++) {
+        ObsRowWidget *w = &obs_row[j];
+        const int idx = first + j;
+        if (idx >= 0 && idx < obs_latch_len) {
+            const ObsEntry *e = &obs_latch[idx];
+            lv_obj_clear_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(w->row, 0, idx * row_h);
 
-            lv_obj_t *row = lv_obj_create(obs_log);
-            lv_obj_set_width(row, LV_PCT(100));
-            lv_obj_set_height(row, 96);
-            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-            lv_obj_t *name = lv_label_create(row);
-            lv_label_set_text(name, e->raw.name[0] != '\0' ? e->raw.name : "No advertised name");
-            lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -32);
-
-            lv_obj_t *kind = lv_label_create(row);
-            lv_obj_set_style_text_font(kind, TOOLBOX_FONT_DETAIL, 0);
-            char kind_buf[80];
-            kind_text(e->info.kind, e->info.fastpair_model_id, kind_buf, sizeof(kind_buf));
-            lv_label_set_text(kind, kind_buf);
-            lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -11);
-
-            lv_obj_t *vt = lv_label_create(row);
-            lv_obj_set_style_text_font(vt, TOOLBOX_FONT_DETAIL, 0);
-            char vt_buf[96];
+            lv_label_set_text(w->name, e->raw.name[0] != '\0' ? e->raw.name : "No advertised name");
+            char buf[96];
+            kind_text(e->info.kind, e->info.fastpair_model_id, buf, sizeof(buf));
+            lv_label_set_text(w->kind, buf);
             ident_vendor_type(e->raw.company_id, e->raw.service_uuid, e->raw.appearance,
-                              vt_buf, sizeof(vt_buf));
-            lv_label_set_text(vt, vt_buf);
-            lv_obj_align(vt, LV_ALIGN_LEFT_MID, 0, 10);
-
-            lv_obj_t *addr = lv_label_create(row);
-            lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-            lv_label_set_text(addr, e->raw.addr_str);
-            lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 31);
-
-            lv_obj_t *rssi = lv_label_create(row);
-            lv_obj_set_style_text_font(rssi, TOOLBOX_FONT_DETAIL, 0);
-            char r[32];
-            snprintf(r, sizeof(r), "%d dBm", e->raw.rssi);
-            lv_label_set_text(rssi, r);
-            lv_obj_align(rssi, LV_ALIGN_RIGHT_MID, 0, 0);
+                              buf, sizeof(buf));
+            lv_label_set_text(w->vt, buf);
+            lv_label_set_text(w->addr, e->raw.addr_str);
+            snprintf(buf, sizeof(buf), "%d dBm", e->raw.rssi);
+            lv_label_set_text(w->rssi, buf);
+        } else {
+            lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+void BleToolboxApp::onObserverScroll(lv_event_t *e)
+{
+    (void)e;
+    if (g_app != nullptr) {
+        g_app->renderObserverRows();
+    }
+}
+
+void BleToolboxApp::refreshObserver(void)
+{
+    if (obs_log == nullptr || obs_spacer == nullptr) {
+        return;
+    }
+
+    /* The spacer sets the total scrollable height; only the visible rows get widgets. */
+    lv_obj_set_height(obs_spacer, (lv_coord_t)(obs_latch_len * 96));
+
+    if (obs_empty != nullptr) {
+        if (obs_latch_len == 0) {
+            lv_obj_clear_flag(obs_empty, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(obs_empty, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    renderObserverRows();
 
     /* Oldest first: new advertisers are appended to the bottom, so positions are stable. */
     char count[80];
@@ -1821,11 +1849,60 @@ void BleToolboxApp::buildObserver(void)
                                        (void *)(intptr_t)ACT_OBS_STOP, 44);
     lv_obj_set_flex_grow(obs_stop_btn, 1);
 
-    /* A scrolling list, not a single label. toolbox_make_log was a label, and a label
-     * clips what it cannot show with no way to reach it: the Observer was never
-     * scrollable, and raising the font size only increased how much was cut off. See the
-     * helper for the detail. */
-    obs_log = toolbox_make_log(panel);
+    /* A virtualized scrolling list: a plain (non-flex) scrollable container whose total
+     * height comes from a spacer, with a fixed pool of row widgets repositioned over the
+     * visible slice (see renderObserverRows). Widget count stays constant regardless of
+     * how many advertisers the latch holds. */
+    obs_log = lv_obj_create(panel);
+    lv_obj_set_width(obs_log, LV_PCT(100));
+    lv_obj_set_flex_grow(obs_log, 1);
+    lv_obj_set_style_pad_all(obs_log, 0, 0);
+    lv_obj_set_scroll_dir(obs_log, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(obs_log, LV_SCROLLBAR_MODE_ACTIVE);
+
+    obs_spacer = lv_obj_create(obs_log);
+    lv_obj_set_size(obs_spacer, LV_PCT(100), 1);
+    lv_obj_set_style_bg_opa(obs_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(obs_spacer, 0, 0);
+    lv_obj_set_style_pad_all(obs_spacer, 0, 0);
+    lv_obj_clear_flag(obs_spacer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    obs_empty = lv_label_create(obs_log);
+    lv_obj_set_style_text_font(obs_empty, TOOLBOX_FONT_DETAIL, 0);
+    lv_label_set_text(obs_empty, "nothing heard yet");
+    lv_obj_align(obs_empty, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    for (int j = 0; j < kObsRowPool; j++) {
+        ObsRowWidget *w = &obs_row[j];
+        w->row = lv_obj_create(obs_log);
+        lv_obj_set_size(w->row, LV_PCT(100), 96);
+        lv_obj_clear_flag(w->row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_border_width(w->row, 0, 0);
+        lv_obj_set_style_pad_all(w->row, 0, 0);
+
+        w->name = lv_label_create(w->row);
+        lv_obj_align(w->name, LV_ALIGN_LEFT_MID, 0, -32);
+
+        w->kind = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->kind, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->kind, LV_ALIGN_LEFT_MID, 0, -11);
+
+        w->vt = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->vt, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->vt, LV_ALIGN_LEFT_MID, 0, 10);
+
+        w->addr = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->addr, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->addr, LV_ALIGN_LEFT_MID, 0, 31);
+
+        w->rssi = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->rssi, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->rssi, LV_ALIGN_RIGHT_MID, 0, 0);
+
+        lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_obj_add_event_cb(obs_log, onObserverScroll, LV_EVENT_SCROLL, this);
 }
 
 void BleToolboxApp::buildRadar(void)
@@ -2568,17 +2645,15 @@ void BleToolboxApp::selfTest(void)
      * an empty list and says nothing about a full one - a first version of this check did
      * exactly that and proved nothing. */
     showScreen(SCREEN_OBSERVER);
-    if (obs_log != nullptr) {
-        lv_obj_clean(obs_log);
-        for (int i = 0; i < kObsCap; i++) {
-            toolbox_make_log_line(obs_log, "Apple FindMy  fc:1b:5d:dd:54:80  -64 dBm");
-        }
+    if (obs_log != nullptr && obs_spacer != nullptr) {
+        /* The virtualized list's scroll range comes from the spacer, not the children.
+         * Drive the spacer as if the latch were full and measure. */
+        lv_obj_set_height(obs_spacer, (lv_coord_t)(kObsCap * 96));
         lv_obj_update_layout(screens[SCREEN_OBSERVER]);
 
         const int range = lv_obj_get_scroll_bottom(obs_log) + lv_obj_get_scroll_top(obs_log);
-        ESP_LOGW(TAG, "  observer list: %d lines filled, scroll range %d px  %s",
-                 (int)lv_obj_get_child_cnt(obs_log), range,
-                 range > 0 ? "SCROLLABLE" : "NOT scrollable");
+        ESP_LOGW(TAG, "  observer list: cap %d, scroll range %d px  %s",
+                 (int)kObsCap, range, range > 0 ? "SCROLLABLE" : "NOT scrollable");
 
         /* Leave it as the app would: the next tick redraws from the latch. */
         obs_latch_len = 0;

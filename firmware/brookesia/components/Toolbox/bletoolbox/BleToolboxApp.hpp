@@ -113,6 +113,7 @@ private:
     static void onAdv(const ble_toolbox_adv_t *adv, void *user);
     static void onRawAdv(const ble_toolbox_raw_adv_t *adv, void *user);
     static void onScanState(bool scanning, esp_err_t reason, void *user);
+    static void onObserverScroll(lv_event_t *e);
     static void onConnState(ble_toolbox_conn_state_t state, esp_err_t reason, void *user);
     static void onConnSvc(const ble_toolbox_gatt_svc_t *svc, void *user);
     static void onConnChr(const ble_toolbox_gatt_chr_t *chr, void *user);
@@ -125,6 +126,7 @@ private:
     static void onPasskeyEvent(lv_event_t *e);
 
     void latchAdv(const ble_toolbox_adv_t *adv);
+    void renderObserverRows(void);
     void latchRaw(const ble_toolbox_raw_adv_t *adv);
     void latchSvc(const ble_toolbox_gatt_svc_t *svc);
     void latchChr(const ble_toolbox_gatt_chr_t *chr);
@@ -212,7 +214,7 @@ private:
      * kObsCap was 12, which for a sniffer is too few to see a pattern in - a dozen frames
      * is under a second of traffic here. It is now 60, which is a few seconds of real
      * traffic and about what will fit on the screen without an unreasonable scroll. */
-    enum { kScanCap = 40, kObsCap = 60, kTagCap = 40 };
+    enum { kScanCap = 40, kTagCap = 40, kObsCap = 1024, kObsRowPool = 12 };
 
     struct ScanEntry {
         ble_toolbox_adv_t adv;
@@ -225,9 +227,23 @@ private:
         ble_toolbox_raw_adv_t raw;
         ble_toolbox_adv_info_t info;
     };
-    ObsEntry obs_latch[kObsCap];
+    ObsEntry *obs_latch;           /* PSRAM-backed, kObsCap entries, allocated in init() */
     volatile int obs_latch_len;
     volatile uint32_t obs_total;
+
+    /* Virtualized renderer: a fixed pool of row widgets repositioned over the visible
+     * slice of the latch, so UI cost is constant regardless of how many entries exist. */
+    struct ObsRowWidget {
+        lv_obj_t *row;
+        lv_obj_t *name;
+        lv_obj_t *kind;
+        lv_obj_t *vt;
+        lv_obj_t *addr;
+        lv_obj_t *rssi;
+    };
+    ObsRowWidget obs_row[kObsRowPool];
+    lv_obj_t *obs_spacer;          /* transparent child whose height = obs_latch_len * row */
+    lv_obj_t *obs_empty;           /* "nothing heard yet" placeholder */
 
     /* AirTag-class adverts, kept apart from the general listing because that is the
      * whole point of the screen. */
