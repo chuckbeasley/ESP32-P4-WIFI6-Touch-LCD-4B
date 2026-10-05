@@ -192,6 +192,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             raw.adv_type = d->event_type;
             raw.data_len = (d->length_data < sizeof(raw.data))
                            ? d->length_data : (uint8_t)sizeof(raw.data);
+            raw.company_id = adv_company_id(d->data, d->length_data);
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);
@@ -246,6 +247,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
                            ? d->legacy_event_type : BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND;
             raw.data_len = (d->length_data < sizeof(raw.data))
                            ? d->length_data : (uint8_t)sizeof(raw.data);
+            raw.company_id = adv_company_id(d->data, d->length_data);
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);

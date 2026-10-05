@@ -57,6 +57,8 @@ typedef struct {
     uint8_t  adv_type;             /* the controller's event type */
     uint8_t  data[64];             /* the AD structures, as received */
     uint8_t  data_len;
+    uint16_t company_id;           /* Bluetooth SIG company ID from the manufacturer-specific
+                                    * AD field, little-endian; 0 when the advert has none */
 } ble_toolbox_raw_adv_t;
 
 /* Scan parameters. Channel 37/38/39 are the advertising channels; leaving a channel

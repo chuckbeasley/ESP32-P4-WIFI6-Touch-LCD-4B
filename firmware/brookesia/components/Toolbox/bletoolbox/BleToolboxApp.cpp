@@ -1341,7 +1341,14 @@ void BleToolboxApp::refreshObserver(void)
 
             lv_obj_t *addr = lv_label_create(row);
             lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-            lv_label_set_text(addr, e->raw.addr_str);
+            char addr_text[96];
+            const char *vendor = vendor_lookup_company(e->raw.company_id);
+            if (vendor != NULL) {
+                snprintf(addr_text, sizeof(addr_text), "%s  -  %s", e->raw.addr_str, vendor);
+            } else {
+                snprintf(addr_text, sizeof(addr_text), "%s", e->raw.addr_str);
+            }
+            lv_label_set_text(addr, addr_text);
             lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
 
             lv_obj_t *rssi = lv_label_create(row);
