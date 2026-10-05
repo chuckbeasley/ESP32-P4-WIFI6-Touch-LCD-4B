@@ -441,9 +441,16 @@ BleToolboxApp::BleToolboxApp():
 {
     memset(screens, 0, sizeof(screens));
     memset(obs_row, 0, sizeof(obs_row));
+    memset(scan_row, 0, sizeof(scan_row));
+    memset(scan_row_slot, 0, sizeof(scan_row_slot));
+    memset(tag_row, 0, sizeof(tag_row));
     obs_latch = nullptr;
     obs_spacer = nullptr;
     obs_empty = nullptr;
+    scan_spacer = nullptr;
+    scan_empty = nullptr;
+    tag_spacer = nullptr;
+    tag_empty = nullptr;
 }
 
 BleToolboxApp::~BleToolboxApp()
@@ -629,6 +636,13 @@ bool BleToolboxApp::close(void)
         obs_latch = nullptr;
     }
     obs_latch_len = 0;
+    scan_spacer = nullptr;
+    scan_empty = nullptr;
+    memset(scan_row, 0, sizeof(scan_row));
+    memset(scan_row_slot, 0, sizeof(scan_row_slot));
+    tag_spacer = nullptr;
+    tag_empty = nullptr;
+    memset(tag_row, 0, sizeof(tag_row));
     obs_start_btn = nullptr;
     obs_stop_btn = nullptr;
 
@@ -1161,86 +1175,82 @@ void BleToolboxApp::updateStatus(void)
     }
 }
 
-void BleToolboxApp::refreshScan(void)
+void BleToolboxApp::renderScanRows(void)
 {
     if (scan_list == nullptr) {
         return;
     }
 
-    /* Rebuilding the list would otherwise snap the scroll back to the top. Remember
-     * where the user was and restore it after the rows are rebuilt. */
-    const lv_coord_t saved_scroll = lv_obj_get_scroll_y(scan_list);
-    lv_obj_clean(scan_list);
+    const int row_h = 96;
+    const int first = lv_obj_get_scroll_y(scan_list) / row_h;
 
-    if (scan_latch_len == 0) {
-        lv_obj_t *empty = lv_label_create(scan_list);
-        lv_label_set_text(empty, "no connectable devices yet");
+    for (int j = 0; j < kScanRowPool; j++) {
+        ScanRowWidget *w = &scan_row[j];
+        const int idx = first + j;
+        if (idx >= 0 && idx < scan_latch_len) {
+            const ble_toolbox_adv_t *a = &scan_latch[idx].adv;
+            scan_row_slot[j] = idx;   /* the button reads the latch index from here */
+            lv_obj_clear_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(w->row, 0, idx * row_h);
+
+            lv_label_set_text(w->name, a->name[0] != '\0' ? a->name : "No advertised name");
+            char buf[96];
+            kind_text((ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id, buf, sizeof(buf));
+            lv_label_set_text(w->kind, buf);
+            ident_vendor_type(a->company_id, a->service_uuid, a->appearance, buf, sizeof(buf));
+            lv_label_set_text(w->vt, buf);
+            lv_label_set_text(w->addr, a->addr_str);
+
+            const bool is_connected = (conn_state == BLE_TOOLBOX_CONN_CONNECTED &&
+                                       memcmp(conn_addr, a->addr, 6) == 0 &&
+                                       conn_random == a->random_addr);
+            lv_label_set_text(w->btn_label, is_connected ? "Disconnect" : "Connect");
+        } else {
+            lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void BleToolboxApp::onScanScroll(lv_event_t *e)
+{
+    (void)e;
+    if (g_app != nullptr) {
+        g_app->renderScanRows();
+    }
+}
+
+void BleToolboxApp::refreshScan(void)
+{
+    if (scan_list == nullptr || scan_spacer == nullptr) {
         return;
     }
 
-    for (int i = 0; i < scan_latch_len; i++) {
-        const ble_toolbox_adv_t *a = &scan_latch[i].adv;
+    lv_obj_set_height(scan_spacer, (lv_coord_t)(scan_latch_len * 96));
 
-        lv_obj_t *row = lv_obj_create(scan_list);
-        lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, 96);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t *name = lv_label_create(row);
-        lv_label_set_text(name, a->name[0] != '\0' ? a->name : "No advertised name");
-        lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, -32);
-
-        lv_obj_t *kind = lv_label_create(row);
-        lv_obj_set_style_text_font(kind, TOOLBOX_FONT_DETAIL, 0);
-        char kind_buf[80];
-        kind_text((ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id, kind_buf,
-                  sizeof(kind_buf));
-        lv_label_set_text(kind, kind_buf);
-        lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -11);
-
-        lv_obj_t *vt = lv_label_create(row);
-        lv_obj_set_style_text_font(vt, TOOLBOX_FONT_DETAIL, 0);
-        char vt_buf[96];
-        ident_vendor_type(a->company_id, a->service_uuid, a->appearance, vt_buf,
-                          sizeof(vt_buf));
-        lv_label_set_text(vt, vt_buf);
-        lv_obj_align(vt, LV_ALIGN_LEFT_MID, 0, 10);
-
-        lv_obj_t *addr = lv_label_create(row);
-        lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-        lv_label_set_text(addr, a->addr_str);
-        lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 31);
-
-        /* The Connect button is the action; the row itself is not clickable. It
-         * doubles as Disconnect once this device is the connected one. */
-        const bool is_connected = (conn_state == BLE_TOOLBOX_CONN_CONNECTED &&
-                                   memcmp(conn_addr, a->addr, 6) == 0 &&
-                                   conn_random == a->random_addr);
-
-        lv_obj_t *btn = lv_btn_create(row);
-        lv_obj_set_size(btn, 96, 44);
-        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, 0, 0);
-        lv_obj_t *btn_label = lv_label_create(btn);
-        lv_label_set_text(btn_label, is_connected ? "Disconnect" : "Connect");
-        lv_obj_center(btn_label);
-        lv_obj_add_event_cb(btn, onScanRowClick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        tb_group_add(btn);
+    if (scan_empty != nullptr) {
+        if (scan_latch_len == 0) {
+            lv_obj_clear_flag(scan_empty, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(scan_empty, LV_OBJ_FLAG_HIDDEN);
+        }
     }
+
+    renderScanRows();
 
     char count[48];
     snprintf(count, sizeof(count), "%d device%s", scan_latch_len, scan_latch_len == 1 ? "" : "s");
     lv_label_set_text(scan_count_label, count);
-
-    /* Restore the scroll position the user was at before this rebuild. */
-    lv_obj_update_layout(scan_list);
-    lv_obj_scroll_to_y(scan_list, saved_scroll, LV_ANIM_OFF);
 }
 
 void BleToolboxApp::onScanRowClick(lv_event_t *e)
 {
-    const int slot = (int)(intptr_t)lv_event_get_user_data(e);
+    const int pool = (int)(intptr_t)lv_event_get_user_data(e);
     BleToolboxApp *app = g_app;
-    if (app == nullptr || slot < 0 || slot >= app->scan_latch_len) {
+    if (app == nullptr || pool < 0 || pool >= kScanRowPool) {
+        return;
+    }
+    const int slot = app->scan_row_slot[pool];
+    if (slot < 0 || slot >= app->scan_latch_len) {
         return;
     }
 
@@ -1475,39 +1485,57 @@ void BleToolboxApp::refreshObserver(void)
     lv_label_set_text(obs_count_label, count);
 }
 
-void BleToolboxApp::refreshAirTag(void)
+void BleToolboxApp::renderTagRows(void)
 {
     if (tag_list == nullptr) {
         return;
     }
 
-    lv_obj_clean(tag_list);
+    const int row_h = 40;
+    const int first = lv_obj_get_scroll_y(tag_list) / row_h;
 
-    if (tag_latch_len == 0) {
-        lv_obj_t *empty = lv_label_create(tag_list);
-        lv_label_set_text(empty, "no Find My trackers heard");
-    } else {
-        for (int i = 0; i < tag_latch_len; i++) {
-            const ble_toolbox_adv_t *a = &tag_latch[i].adv;
-
-            lv_obj_t *row = lv_obj_create(tag_list);
-            lv_obj_set_width(row, LV_PCT(100));
-            lv_obj_set_height(row, 40);
-            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-            lv_obj_t *addr = lv_label_create(row);
-            lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-            lv_label_set_text(addr, a->addr_str);
-            lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 0);
-
-            lv_obj_t *rssi = lv_label_create(row);
-            lv_obj_set_style_text_font(rssi, TOOLBOX_FONT_DETAIL, 0);
+    for (int j = 0; j < kTagRowPool; j++) {
+        TagRowWidget *w = &tag_row[j];
+        const int idx = first + j;
+        if (idx >= 0 && idx < tag_latch_len) {
+            const ble_toolbox_adv_t *a = &tag_latch[idx].adv;
+            lv_obj_clear_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(w->row, 0, idx * row_h);
+            lv_label_set_text(w->addr, a->addr_str);
             char r[24];
             snprintf(r, sizeof(r), "%d dBm", a->rssi);
-            lv_label_set_text(rssi, r);
-            lv_obj_align(rssi, LV_ALIGN_RIGHT_MID, 0, 0);
+            lv_label_set_text(w->rssi, r);
+        } else {
+            lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+void BleToolboxApp::onTagScroll(lv_event_t *e)
+{
+    (void)e;
+    if (g_app != nullptr) {
+        g_app->renderTagRows();
+    }
+}
+
+void BleToolboxApp::refreshAirTag(void)
+{
+    if (tag_list == nullptr || tag_spacer == nullptr) {
+        return;
+    }
+
+    lv_obj_set_height(tag_spacer, (lv_coord_t)(tag_latch_len * 40));
+
+    if (tag_empty != nullptr) {
+        if (tag_latch_len == 0) {
+            lv_obj_clear_flag(tag_empty, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(tag_empty, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    renderTagRows();
 
     char count[64];
     snprintf(count, sizeof(count), "%lu tracker advert(s)", (unsigned long)tag_total);
@@ -1814,15 +1842,62 @@ void BleToolboxApp::buildScan(void)
     tb_group_add(scan_start_btn);
     tb_group_add(scan_stop_btn);
 
-    /* The list scrolls inside the panel, which already scrolls. Nesting two scrollers
-     * is deliberate here: the buttons and the count stay put while the list moves. */
+    /* Virtualized list: a plain (non-flex) scrollable container whose height comes from a
+     * spacer, with a fixed pool of row widgets repositioned over the visible slice. */
     scan_list = lv_obj_create(panel);
     lv_obj_set_width(scan_list, LV_PCT(100));
     lv_obj_set_flex_grow(scan_list, 1);
-    lv_obj_set_flex_flow(scan_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(scan_list, 0, 0);
-    lv_obj_set_style_pad_row(scan_list, 4, 0);
     lv_obj_set_scroll_dir(scan_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(scan_list, LV_SCROLLBAR_MODE_ACTIVE);
+
+    scan_spacer = lv_obj_create(scan_list);
+    lv_obj_set_size(scan_spacer, LV_PCT(100), 1);
+    lv_obj_set_style_bg_opa(scan_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(scan_spacer, 0, 0);
+    lv_obj_set_style_pad_all(scan_spacer, 0, 0);
+    lv_obj_clear_flag(scan_spacer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    scan_empty = lv_label_create(scan_list);
+    lv_obj_set_style_text_font(scan_empty, TOOLBOX_FONT_DETAIL, 0);
+    lv_label_set_text(scan_empty, "no connectable devices yet");
+    lv_obj_align(scan_empty, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    for (int j = 0; j < kScanRowPool; j++) {
+        ScanRowWidget *w = &scan_row[j];
+        w->row = lv_obj_create(scan_list);
+        lv_obj_set_size(w->row, LV_PCT(100), 96);
+        lv_obj_clear_flag(w->row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_border_width(w->row, 0, 0);
+        lv_obj_set_style_pad_all(w->row, 0, 0);
+
+        w->name = lv_label_create(w->row);
+        lv_obj_align(w->name, LV_ALIGN_LEFT_MID, 0, -32);
+
+        w->kind = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->kind, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->kind, LV_ALIGN_LEFT_MID, 0, -11);
+
+        w->vt = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->vt, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->vt, LV_ALIGN_LEFT_MID, 0, 10);
+
+        w->addr = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->addr, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->addr, LV_ALIGN_LEFT_MID, 0, 31);
+
+        w->btn = lv_btn_create(w->row);
+        lv_obj_set_size(w->btn, 96, 44);
+        lv_obj_align(w->btn, LV_ALIGN_RIGHT_MID, 0, 0);
+        w->btn_label = lv_label_create(w->btn);
+        lv_obj_center(w->btn_label);
+        lv_obj_add_event_cb(w->btn, onScanRowClick, LV_EVENT_CLICKED, (void *)(intptr_t)j);
+        tb_group_add(w->btn);
+
+        lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_obj_add_event_cb(scan_list, onScanScroll, LV_EVENT_SCROLL, this);
 }
 
 void BleToolboxApp::buildObserver(void)
@@ -2523,10 +2598,42 @@ void BleToolboxApp::buildAirTag(void){
     tag_list = lv_obj_create(panel);
     lv_obj_set_width(tag_list, LV_PCT(100));
     lv_obj_set_flex_grow(tag_list, 1);
-    lv_obj_set_flex_flow(tag_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(tag_list, 0, 0);
-    lv_obj_set_style_pad_row(tag_list, 4, 0);
     lv_obj_set_scroll_dir(tag_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(tag_list, LV_SCROLLBAR_MODE_ACTIVE);
+
+    tag_spacer = lv_obj_create(tag_list);
+    lv_obj_set_size(tag_spacer, LV_PCT(100), 1);
+    lv_obj_set_style_bg_opa(tag_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(tag_spacer, 0, 0);
+    lv_obj_set_style_pad_all(tag_spacer, 0, 0);
+    lv_obj_clear_flag(tag_spacer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    tag_empty = lv_label_create(tag_list);
+    lv_obj_set_style_text_font(tag_empty, TOOLBOX_FONT_DETAIL, 0);
+    lv_label_set_text(tag_empty, "no Find My trackers heard");
+    lv_obj_align(tag_empty, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    for (int j = 0; j < kTagRowPool; j++) {
+        TagRowWidget *w = &tag_row[j];
+        w->row = lv_obj_create(tag_list);
+        lv_obj_set_size(w->row, LV_PCT(100), 40);
+        lv_obj_clear_flag(w->row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_border_width(w->row, 0, 0);
+        lv_obj_set_style_pad_all(w->row, 0, 0);
+
+        w->addr = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->addr, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->addr, LV_ALIGN_LEFT_MID, 0, 0);
+
+        w->rssi = lv_label_create(w->row);
+        lv_obj_set_style_text_font(w->rssi, TOOLBOX_FONT_DETAIL, 0);
+        lv_obj_align(w->rssi, LV_ALIGN_RIGHT_MID, 0, 0);
+
+        lv_obj_add_flag(w->row, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_obj_add_event_cb(tag_list, onTagScroll, LV_EVENT_SCROLL, this);
 }
 
 /* ---- Self-test ----------------------------------------------------------- */

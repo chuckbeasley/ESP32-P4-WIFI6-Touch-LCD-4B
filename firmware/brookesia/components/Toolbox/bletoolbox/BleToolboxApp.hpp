@@ -114,6 +114,8 @@ private:
     static void onRawAdv(const ble_toolbox_raw_adv_t *adv, void *user);
     static void onScanState(bool scanning, esp_err_t reason, void *user);
     static void onObserverScroll(lv_event_t *e);
+    static void onScanScroll(lv_event_t *e);
+    static void onTagScroll(lv_event_t *e);
     static void onConnState(ble_toolbox_conn_state_t state, esp_err_t reason, void *user);
     static void onConnSvc(const ble_toolbox_gatt_svc_t *svc, void *user);
     static void onConnChr(const ble_toolbox_gatt_chr_t *chr, void *user);
@@ -127,6 +129,8 @@ private:
 
     void latchAdv(const ble_toolbox_adv_t *adv);
     void renderObserverRows(void);
+    void renderScanRows(void);
+    void renderTagRows(void);
     void latchRaw(const ble_toolbox_raw_adv_t *adv);
     void latchSvc(const ble_toolbox_gatt_svc_t *svc);
     void latchChr(const ble_toolbox_gatt_chr_t *chr);
@@ -214,7 +218,8 @@ private:
      * kObsCap was 12, which for a sniffer is too few to see a pattern in - a dozen frames
      * is under a second of traffic here. It is now 60, which is a few seconds of real
      * traffic and about what will fit on the screen without an unreasonable scroll. */
-    enum { kScanCap = 40, kTagCap = 40, kObsCap = 1024, kObsRowPool = 12 };
+    enum { kScanCap = 256, kTagCap = 256, kObsCap = 1024,
+           kScanRowPool = 12, kTagRowPool = 20, kObsRowPool = 12 };
 
     struct ScanEntry {
         ble_toolbox_adv_t adv;
@@ -222,6 +227,20 @@ private:
     ScanEntry scan_latch[kScanCap];
     volatile int scan_latch_len;
     volatile uint32_t scan_total;
+
+    struct ScanRowWidget {
+        lv_obj_t *row;
+        lv_obj_t *name;
+        lv_obj_t *kind;
+        lv_obj_t *vt;
+        lv_obj_t *addr;
+        lv_obj_t *btn;
+        lv_obj_t *btn_label;
+    };
+    ScanRowWidget scan_row[kScanRowPool];
+    int scan_row_slot[kScanRowPool];   /* latch index currently shown in pool row j */
+    lv_obj_t *scan_spacer;
+    lv_obj_t *scan_empty;
 
     struct ObsEntry {
         ble_toolbox_raw_adv_t raw;
@@ -254,6 +273,15 @@ private:
     volatile int tag_latch_len;
     volatile uint32_t tag_total;
     volatile uint32_t glasses_total;
+
+    struct TagRowWidget {
+        lv_obj_t *row;
+        lv_obj_t *addr;
+        lv_obj_t *rssi;
+    };
+    TagRowWidget tag_row[kTagRowPool];
+    lv_obj_t *tag_spacer;
+    lv_obj_t *tag_empty;
 
     /* GATT browser latches, filled by the connection callbacks and drained by the timer. */
     enum { kSvcCap = 32, kChrCap = 64 };
