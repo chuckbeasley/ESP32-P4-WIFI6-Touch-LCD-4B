@@ -733,22 +733,34 @@ void BleToolboxApp::latchAdv(const ble_toolbox_adv_t *adv)
 
 void BleToolboxApp::latchRaw(const ble_toolbox_raw_adv_t *raw)
 {
-    obs_total++;
-
     ble_toolbox_adv_info_t info;
     ble_toolbox_adv_decode(raw->data, raw->data_len, &info);
 
-    /* Two screens want different subsets, so the raw latch keeps everything and each
-     * screen filters. The observer log is newest-first, which is what a sniffer is
-     * read for. */
-    if (obs_latch_len < kObsCap) {
-        obs_latch_len++;
+    /* Deduplicate by address: a device re-broadcasts its advertisement continuously
+     * and answers scan requests, so without this the count climbs far past what the
+     * list can ever show. Update the existing row in place (RSSI drifts) instead of
+     * adding a duplicate. */
+    bool known = false;
+    for (int i = 0; i < obs_latch_len; i++) {
+        if (memcmp(obs_latch[i].raw.addr, raw->addr, 6) == 0) {
+            obs_latch[i].raw = *raw;
+            obs_latch[i].info = info;
+            known = true;
+            break;
+        }
     }
-    for (int i = obs_latch_len - 1; i > 0; i--) {
-        obs_latch[i] = obs_latch[i - 1];
+
+    if (!known) {
+        obs_total++;
+        if (obs_latch_len < kObsCap) {
+            obs_latch_len++;
+        }
+        for (int i = obs_latch_len - 1; i > 0; i--) {
+            obs_latch[i] = obs_latch[i - 1];
+        }
+        obs_latch[0].raw = *raw;
+        obs_latch[0].info = info;
     }
-    obs_latch[0].raw = *raw;
-    obs_latch[0].info = info;
 
     if (info.kind == BLE_ADV_APPLE_FINDMY) {
         tag_total++;
@@ -1418,7 +1430,7 @@ void BleToolboxApp::refreshObserver(void)
     /* Newest first, which is what a sniffer is read for: the latch is built newest-to-
      * oldest, so no reversal is needed here. */
     char count[80];
-    snprintf(count, sizeof(count), "%lu frames heard, newest %d shown",
+    snprintf(count, sizeof(count), "%lu advertisers heard, newest %d shown",
              (unsigned long)obs_total, obs_latch_len);
     lv_label_set_text(obs_count_label, count);
 }
