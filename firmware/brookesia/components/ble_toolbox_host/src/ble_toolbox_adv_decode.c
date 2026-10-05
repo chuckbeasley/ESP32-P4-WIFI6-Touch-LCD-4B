@@ -243,11 +243,11 @@ void ble_toolbox_adv_decode(const uint8_t *data, uint8_t len, ble_toolbox_adv_in
                 break;
             }
             const uint16_t svc_uuid = (uint16_t)(body[0] | (body[1] << 8));
-            if (svc_uuid == SVC_FAST_PAIR && body_len >= 6) {
-                /* [0x2C 0xFE][model type][3-byte model id] */
-                out->fastpair_model_id = ((uint32_t)body[3] << 16) |
-                                         ((uint32_t)body[4] << 8) |
-                                         (uint32_t)body[5];
+            if (svc_uuid == SVC_FAST_PAIR && body_len >= 5) {
+                /* [0x2C 0xFE][3-byte model id, big-endian] — pairing mode */
+                out->fastpair_model_id = ((uint32_t)body[2] << 16) |
+                                         ((uint32_t)body[3] << 8) |
+                                         (uint32_t)body[4];
                 out->kind = BLE_ADV_FAST_PAIR;
                 return;
             }

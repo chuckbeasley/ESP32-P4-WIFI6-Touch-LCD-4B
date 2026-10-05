@@ -26,6 +26,9 @@ const char *vendor_lookup_service(uint16_t uuid);
 /* Name for a GAP appearance value (e.g. a watch, a phone), or NULL. */
 const char *vendor_lookup_appearance(uint16_t appearance);
 
+/* Name for a Google Fast Pair 24-bit model ID (e.g. 0x0A14 -> "Galaxy Buds"), or NULL. */
+const char *vendor_lookup_fastpair(uint32_t model_id);
+
 #ifdef __cplusplus
 }
 #endif

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 
 #include "vendor_table.inc"
+#include "fastpair_models.inc"
 
 static int oui_cmp(const void *key, const void *elem)
 {
@@ -71,4 +72,14 @@ const char *vendor_lookup_appearance(uint16_t appearance)
         &appearance, vendor_appearance_table, vendor_appearance_count,
         sizeof(vendor_appearance_table[0]), appearance_cmp);
     return e ? e->name : NULL;
+}
+
+const char *vendor_lookup_fastpair(uint32_t model_id)
+{
+    for (uint32_t i = 0; i < fastpair_model_count; i++) {
+        if (fastpair_models[i].id == model_id) {
+            return fastpair_models[i].name;
+        }
+    }
+    return NULL;
 }

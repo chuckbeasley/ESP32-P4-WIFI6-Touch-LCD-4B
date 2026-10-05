@@ -1354,7 +1354,20 @@ void BleToolboxApp::refreshObserver(void)
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
             lv_obj_t *kind = lv_label_create(row);
-            lv_label_set_text(kind, ble_toolbox_adv_kind_name(e->info.kind));
+            char kind_text[80];
+            if (e->info.kind == BLE_ADV_FAST_PAIR) {
+                const char *model = vendor_lookup_fastpair(e->info.fastpair_model_id);
+                if (model != NULL) {
+                    snprintf(kind_text, sizeof(kind_text), "Fast Pair - %s", model);
+                } else {
+                    snprintf(kind_text, sizeof(kind_text), "Fast Pair 0x%06lX",
+                             (unsigned long)e->info.fastpair_model_id);
+                }
+            } else {
+                snprintf(kind_text, sizeof(kind_text), "%s",
+                         ble_toolbox_adv_kind_name(e->info.kind));
+            }
+            lv_label_set_text(kind, kind_text);
             lv_obj_align(kind, LV_ALIGN_LEFT_MID, 0, -8);
 
             lv_obj_t *addr = lv_label_create(row);
