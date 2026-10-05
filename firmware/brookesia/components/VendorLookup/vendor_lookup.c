@@ -1,0 +1,45 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Binary search over the generated sorted tables. The tables are large (the IEEE OUI
+ * registry alone is ~40k entries), so they live in a separate generated .inc included
+ * here as static const arrays in flash/rodata, never copied to RAM.
+ */
+#include "vendor_lookup.h"
+
+#include <stdlib.h>
+
+#include "vendor_table.inc"
+
+static int oui_cmp(const void *key, const void *elem)
+{
+    const uint32_t k = *(const uint32_t *)key;
+    const vendor_oui_t *e = (const vendor_oui_t *)elem;
+    return (k > e->oui) - (k < e->oui);
+}
+
+static int co_cmp(const void *key, const void *elem)
+{
+    const uint16_t k = *(const uint16_t *)key;
+    const vendor_co_t *e = (const vendor_co_t *)elem;
+    return (k > e->company) - (k < e->company);
+}
+
+const char *vendor_lookup_oui(const uint8_t mac[6])
+{
+    if (mac == NULL) {
+        return NULL;
+    }
+
+    const uint32_t oui = ((uint32_t)mac[0] << 16) | ((uint32_t)mac[1] << 8) | (uint32_t)mac[2];
+    const vendor_oui_t *e = (const vendor_oui_t *)bsearch(
+        &oui, vendor_oui_table, vendor_oui_count, sizeof(vendor_oui_table[0]), oui_cmp);
+    return e ? e->name : NULL;
+}
+
+const char *vendor_lookup_company(uint16_t company_id)
+{
+    const vendor_co_t *e = (const vendor_co_t *)bsearch(
+        &company_id, vendor_co_table, vendor_co_count, sizeof(vendor_co_table[0]), co_cmp);
+    return e ? e->name : NULL;
+}

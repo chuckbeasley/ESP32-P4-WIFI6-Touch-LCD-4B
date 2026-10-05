@@ -118,6 +118,26 @@ static bool addr_is_random(const uint8_t addr[6])
 
 /* ---- Advertisement callback ---------------------------------------------- */
 
+/* Walk the length-prefixed AD structures for the manufacturer-specific field (0xFF)
+ * and read the 16-bit little-endian company ID that leads it. 0 when absent. */
+static uint16_t adv_company_id(const uint8_t *data, uint8_t len)
+{
+    for (uint8_t i = 0; i + 1 < len; ) {
+        const uint8_t field_len = data[i];
+        if (field_len == 0) {
+            break;
+        }
+        if ((uint16_t)i + 1 + field_len > len) {
+            break;
+        }
+        if (data[i + 1] == 0xFF && field_len >= 3) {
+            return (uint16_t)(data[i + 2] | ((uint16_t)data[i + 3] << 8));
+        }
+        i = (uint8_t)(i + 1 + field_len);
+    }
+    return 0;
+}
+
 static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -144,6 +164,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.directed = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND);
             adv.is_scan_response = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP);
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
+            adv.company_id = adv_company_id(d->data, d->length_data);
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&
@@ -199,6 +220,7 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.directed    = (d->props & BLE_HCI_ADV_DIRECT_MASK) != 0;
             adv.is_scan_response = (d->props & BLE_HCI_ADV_SCAN_RSP_MASK) != 0;
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
+            adv.company_id = adv_company_id(d->data, d->length_data);
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&

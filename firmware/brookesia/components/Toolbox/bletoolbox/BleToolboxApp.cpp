@@ -18,6 +18,7 @@
 #include "ble_toolbox_spam.h"
 #include "toolbox_ui.hpp"
 #include "toolbox_icons.hpp"
+#include "vendor_lookup.h"
 #include "bsp/esp-bsp.h"
 
 static const char *TAG = "BleToolbox";
@@ -1105,7 +1106,14 @@ void BleToolboxApp::refreshScan(void)
 
         lv_obj_t *addr = lv_label_create(row);
         lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
-        lv_label_set_text(addr, a->addr_str);
+        char addr_text[96];
+        const char *vendor = vendor_lookup_company(a->company_id);
+        if (vendor != NULL) {
+            snprintf(addr_text, sizeof(addr_text), "%s  \xC2\xB7  %s", a->addr_str, vendor);
+        } else {
+            snprintf(addr_text, sizeof(addr_text), "%s", a->addr_str);
+        }
+        lv_label_set_text(addr, addr_text);
         lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
 
         /* The Connect button is the action; the row itself is not clickable. It

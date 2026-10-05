@@ -23,6 +23,7 @@ idf_component_register(
         esp_lvgl_adapter
         wifi_toolbox_host
         ble_toolbox_host
+        VendorLookup
         lwip
         bsp_extra
         esp32_p4_wifi6_touch_lcd_4b

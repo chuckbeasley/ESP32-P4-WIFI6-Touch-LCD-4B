@@ -44,6 +44,8 @@ typedef struct {
     bool     directed;             /* directed advertising: someone is being paged */
     bool     is_scan_response;     /* this report is a scan response, not an advert */
     bool     random_addr;          /* the peer uses a random (not public) address */
+    uint16_t company_id;           /* Bluetooth SIG company ID from the manufacturer-specific
+                                    * AD field, little-endian; 0 when the advert has none */
 } ble_toolbox_adv_t;
 
 /* A raw advertisement, for the observer screen. Unlike the listing above this keeps

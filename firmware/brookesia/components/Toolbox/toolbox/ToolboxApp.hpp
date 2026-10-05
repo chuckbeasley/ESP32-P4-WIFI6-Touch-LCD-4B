@@ -117,6 +117,7 @@ private:
     lv_obj_t  *inj_mode_dd;
     lv_obj_t  *inj_ssid_ta;
     lv_obj_t  *inj_bssid_ta;
+    lv_obj_t  *inj_bssid_vendor;
     lv_obj_t  *inj_client_ta;
     lv_obj_t  *inj_channel_dd;
     lv_obj_t  *inj_duration_slider;

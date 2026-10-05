@@ -18,6 +18,7 @@
 #include "wifi_toolbox_net.h"
 #include "wifi_toolbox_pcap.h"
 #include "wifi_toolbox_rpc.h"
+#include "vendor_lookup.h"
 
 #include "ToolboxApp.hpp"
 #include "toolbox_ui.hpp"
@@ -265,6 +266,7 @@ ToolboxApp::ToolboxApp():
     inj_mode_dd(nullptr),
     inj_ssid_ta(nullptr),
     inj_bssid_ta(nullptr),
+    inj_bssid_vendor(nullptr),
     inj_client_ta(nullptr),
     inj_channel_dd(nullptr),
     inj_duration_slider(nullptr),
@@ -796,6 +798,7 @@ void ToolboxApp::buildInject(void)
 
     make_field(panel, "SSID", "beacon SSID", &inj_ssid_ta);
     make_field(panel, "BSSID", "02:11:22:33:44:55", &inj_bssid_ta);
+    make_label_row(panel, "Vendor", &inj_bssid_vendor);
     make_field(panel, "Client MAC", "ff:ff:ff:ff:ff:ff = broadcast", &inj_client_ta);
 
     lv_obj_t *crow = lv_obj_create(panel);
@@ -1530,6 +1533,16 @@ void ToolboxApp::statusTick(lv_timer_t *timer)
         if (!g_latch.link_up && app->inj_log != nullptr) {
             lv_label_set_text(app->inj_log, "co-processor link dropped - session stopped, gate cleared");
         }
+    }
+
+    /* Reflect the vendor of the BSSID typed into the inject/capture target field. */
+    if (app->inj_bssid_vendor != nullptr && app->inj_bssid_ta != nullptr) {
+        uint8_t mac[6];
+        const char *vendor = nullptr;
+        if (wifi_toolbox_parse_mac(lv_textarea_get_text(app->inj_bssid_ta), mac)) {
+            vendor = vendor_lookup_oui(mac);
+        }
+        lv_label_set_text(app->inj_bssid_vendor, vendor ? vendor : "unknown");
     }
 
     /* Scan results: appended here rather than in the scan callbacks, which run on
