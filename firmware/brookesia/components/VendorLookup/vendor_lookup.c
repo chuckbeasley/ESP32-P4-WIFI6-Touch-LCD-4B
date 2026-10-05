@@ -43,3 +43,32 @@ const char *vendor_lookup_company(uint16_t company_id)
         &company_id, vendor_co_table, vendor_co_count, sizeof(vendor_co_table[0]), co_cmp);
     return e ? e->name : NULL;
 }
+
+static int svc_cmp(const void *key, const void *elem)
+{
+    const uint16_t k = *(const uint16_t *)key;
+    const vendor_svc_t *e = (const vendor_svc_t *)elem;
+    return (k > e->uuid) - (k < e->uuid);
+}
+
+static int appearance_cmp(const void *key, const void *elem)
+{
+    const uint16_t k = *(const uint16_t *)key;
+    const vendor_appearance_t *e = (const vendor_appearance_t *)elem;
+    return (k > e->appearance) - (k < e->appearance);
+}
+
+const char *vendor_lookup_service(uint16_t uuid)
+{
+    const vendor_svc_t *e = (const vendor_svc_t *)bsearch(
+        &uuid, vendor_svc_table, vendor_svc_count, sizeof(vendor_svc_table[0]), svc_cmp);
+    return e ? e->name : NULL;
+}
+
+const char *vendor_lookup_appearance(uint16_t appearance)
+{
+    const vendor_appearance_t *e = (const vendor_appearance_t *)bsearch(
+        &appearance, vendor_appearance_table, vendor_appearance_count,
+        sizeof(vendor_appearance_table[0]), appearance_cmp);
+    return e ? e->name : NULL;
+}

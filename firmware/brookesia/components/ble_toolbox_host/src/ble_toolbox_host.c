@@ -118,10 +118,18 @@ static bool addr_is_random(const uint8_t addr[6])
 
 /* ---- Advertisement callback ---------------------------------------------- */
 
-/* Walk the length-prefixed AD structures for the manufacturer-specific field (0xFF)
- * and read the 16-bit little-endian company ID that leads it. 0 when absent. */
-static uint16_t adv_company_id(const uint8_t *data, uint8_t len)
+/* Identification extracted from one advertisement's AD structures in a single walk:
+ * the Bluetooth SIG company ID (manufacturer-specific 0xFF), the first 16-bit service
+ * UUID (0x02/0x03), and the GAP appearance (0x19). */
+typedef struct {
+    uint16_t company_id;
+    uint16_t service_uuid;
+    uint16_t appearance;
+} adv_ident_t;
+
+static void adv_identify(const uint8_t *data, uint8_t len, adv_ident_t *out)
 {
+    memset(out, 0, sizeof(*out));
     for (uint8_t i = 0; i + 1 < len; ) {
         const uint8_t field_len = data[i];
         if (field_len == 0) {
@@ -130,12 +138,31 @@ static uint16_t adv_company_id(const uint8_t *data, uint8_t len)
         if ((uint16_t)i + 1 + field_len > len) {
             break;
         }
-        if (data[i + 1] == 0xFF && field_len >= 3) {
-            return (uint16_t)(data[i + 2] | ((uint16_t)data[i + 3] << 8));
+        const uint8_t type = data[i + 1];
+        const uint8_t *body = &data[i + 2];
+        const uint8_t body_len = (uint8_t)(field_len - 1);
+        switch (type) {
+        case 0xFF:  /* manufacturer specific: 2-byte little-endian company ID */
+            if (body_len >= 2 && out->company_id == 0) {
+                out->company_id = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+            }
+            break;
+        case 0x02:  /* complete 16-bit service UUIDs */
+        case 0x03:  /* incomplete 16-bit service UUIDs */
+            if (body_len >= 2 && out->service_uuid == 0) {
+                out->service_uuid = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+            }
+            break;
+        case 0x19:  /* appearance */
+            if (body_len >= 2) {
+                out->appearance = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+            }
+            break;
+        default:
+            break;
         }
         i = (uint8_t)(i + 1 + field_len);
     }
-    return 0;
 }
 
 static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
@@ -164,7 +191,11 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.directed = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND);
             adv.is_scan_response = (d->event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP);
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
-            adv.company_id = adv_company_id(d->data, d->length_data);
+            adv_ident_t id;
+            adv_identify(d->data, d->length_data, &id);
+            adv.company_id = id.company_id;
+            adv.service_uuid = id.service_uuid;
+            adv.appearance = id.appearance;
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&
@@ -192,7 +223,11 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             raw.adv_type = d->event_type;
             raw.data_len = (d->length_data < sizeof(raw.data))
                            ? d->length_data : (uint8_t)sizeof(raw.data);
-            raw.company_id = adv_company_id(d->data, d->length_data);
+            adv_ident_t id;
+            adv_identify(d->data, d->length_data, &id);
+            raw.company_id = id.company_id;
+            raw.service_uuid = id.service_uuid;
+            raw.appearance = id.appearance;
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);
@@ -221,7 +256,11 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
             adv.directed    = (d->props & BLE_HCI_ADV_DIRECT_MASK) != 0;
             adv.is_scan_response = (d->props & BLE_HCI_ADV_SCAN_RSP_MASK) != 0;
             adv.random_addr = (d->addr.type != BLE_ADDR_PUBLIC);
-            adv.company_id = adv_company_id(d->data, d->length_data);
+            adv_ident_t id;
+            adv_identify(d->data, d->length_data, &id);
+            adv.company_id = id.company_id;
+            adv.service_uuid = id.service_uuid;
+            adv.appearance = id.appearance;
 
             struct ble_hs_adv_fields fields;
             if (ble_hs_adv_parse_fields(&fields, d->data, d->length_data) == 0 &&
@@ -247,7 +286,11 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
                            ? d->legacy_event_type : BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND;
             raw.data_len = (d->length_data < sizeof(raw.data))
                            ? d->length_data : (uint8_t)sizeof(raw.data);
-            raw.company_id = adv_company_id(d->data, d->length_data);
+            adv_ident_t id;
+            adv_identify(d->data, d->length_data, &id);
+            raw.company_id = id.company_id;
+            raw.service_uuid = id.service_uuid;
+            raw.appearance = id.appearance;
             memcpy(raw.data, d->data, raw.data_len);
 
             s_ble.cbs.on_raw(&raw, s_ble.user);

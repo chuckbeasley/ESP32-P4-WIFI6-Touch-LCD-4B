@@ -20,6 +20,12 @@ const char *vendor_lookup_oui(const uint8_t mac[6]);
  * structure), or NULL if unknown. */
 const char *vendor_lookup_company(uint16_t company_id);
 
+/* Name for a 16-bit GATT service UUID (e.g. 0x180D -> "Heart Rate"), or NULL. */
+const char *vendor_lookup_service(uint16_t uuid);
+
+/* Name for a GAP appearance value (e.g. a watch, a phone), or NULL. */
+const char *vendor_lookup_appearance(uint16_t appearance);
+
 #ifdef __cplusplus
 }
 #endif

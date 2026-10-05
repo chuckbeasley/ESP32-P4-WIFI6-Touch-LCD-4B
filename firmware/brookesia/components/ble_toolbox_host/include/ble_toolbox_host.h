@@ -46,6 +46,8 @@ typedef struct {
     bool     random_addr;          /* the peer uses a random (not public) address */
     uint16_t company_id;           /* Bluetooth SIG company ID from the manufacturer-specific
                                     * AD field, little-endian; 0 when the advert has none */
+    uint16_t service_uuid;         /* first 16-bit service UUID in the AD, 0 when none */
+    uint16_t appearance;           /* GAP appearance value, 0 when none */
 } ble_toolbox_adv_t;
 
 /* A raw advertisement, for the observer screen. Unlike the listing above this keeps
@@ -59,6 +61,8 @@ typedef struct {
     uint8_t  data_len;
     uint16_t company_id;           /* Bluetooth SIG company ID from the manufacturer-specific
                                     * AD field, little-endian; 0 when the advert has none */
+    uint16_t service_uuid;         /* first 16-bit service UUID in the AD, 0 when none */
+    uint16_t appearance;           /* GAP appearance value, 0 when none */
 } ble_toolbox_raw_adv_t;
 
 /* Scan parameters. Channel 37/38/39 are the advertising channels; leaving a channel

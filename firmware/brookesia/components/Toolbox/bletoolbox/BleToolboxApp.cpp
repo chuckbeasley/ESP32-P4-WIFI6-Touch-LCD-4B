@@ -307,6 +307,28 @@ static BleToolboxApp *g_app = nullptr;
 #define ACT_CONN_WRITE      603
 #define ACT_CONN_SUBSCRIBE  604
 
+/* Build the detail line for a BLE row: "addr - vendor (service-or-appearance)", omitting
+ * whatever is unknown. The service UUID is preferred over appearance when both exist. */
+static void ident_detail(const char *addr_str, uint16_t company_id,
+                         uint16_t service_uuid, uint16_t appearance,
+                         char *out, size_t n)
+{
+    const char *vendor = vendor_lookup_company(company_id);
+    const char *service = vendor_lookup_service(service_uuid);
+    const char *appearance_name = vendor_lookup_appearance(appearance);
+    const char *type = service ? service : appearance_name;
+
+    if (vendor != NULL && type != NULL) {
+        snprintf(out, n, "%s  -  %s (%s)", addr_str, vendor, type);
+    } else if (vendor != NULL) {
+        snprintf(out, n, "%s  -  %s", addr_str, vendor);
+    } else if (type != NULL) {
+        snprintf(out, n, "%s  -  %s", addr_str, type);
+    } else {
+        snprintf(out, n, "%s", addr_str);
+    }
+}
+
 /* ---- Proximity radar geometry -------------------------------------------- */
 
 #define RADAR_MAX_DIST_M    10.0f   /* outer ring */
@@ -1107,12 +1129,8 @@ void BleToolboxApp::refreshScan(void)
         lv_obj_t *addr = lv_label_create(row);
         lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
         char addr_text[96];
-        const char *vendor = vendor_lookup_company(a->company_id);
-        if (vendor != NULL) {
-            snprintf(addr_text, sizeof(addr_text), "%s  -  %s", a->addr_str, vendor);
-        } else {
-            snprintf(addr_text, sizeof(addr_text), "%s", a->addr_str);
-        }
+        ident_detail(a->addr_str, a->company_id, a->service_uuid, a->appearance,
+                     addr_text, sizeof(addr_text));
         lv_label_set_text(addr, addr_text);
         lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
 
@@ -1342,12 +1360,8 @@ void BleToolboxApp::refreshObserver(void)
             lv_obj_t *addr = lv_label_create(row);
             lv_obj_set_style_text_font(addr, TOOLBOX_FONT_DETAIL, 0);
             char addr_text[96];
-            const char *vendor = vendor_lookup_company(e->raw.company_id);
-            if (vendor != NULL) {
-                snprintf(addr_text, sizeof(addr_text), "%s  -  %s", e->raw.addr_str, vendor);
-            } else {
-                snprintf(addr_text, sizeof(addr_text), "%s", e->raw.addr_str);
-            }
+            ident_detail(e->raw.addr_str, e->raw.company_id, e->raw.service_uuid,
+                         e->raw.appearance, addr_text, sizeof(addr_text));
             lv_label_set_text(addr, addr_text);
             lv_obj_align(addr, LV_ALIGN_LEFT_MID, 0, 10);
 
