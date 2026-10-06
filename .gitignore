@@ -37,3 +37,6 @@ Thumbs.db
 
 # Generated vendor identification database (scripts/gen_vendor_table.py)
 firmware/brookesia/components/VendorLookup/vendor_db.json
+
+# Downloaded Fieldwatch signature catalog (runtime data, not source)
+firmware/brookesia/components/VendorLookup/fieldwatch-signatures-v2.json

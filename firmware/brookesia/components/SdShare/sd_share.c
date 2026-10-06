@@ -28,6 +28,7 @@
 #include "tinyusb_default_config.h"
 #include "tinyusb_msc.h"
 #include "vendor_lookup.h"
+#include "vendor_signature.h"
 
 #include "bsp/esp-bsp.h"
 
@@ -151,9 +152,10 @@ esp_err_t sd_share_start(void)
 
     /* /sdcard is mounted and still owned by the device here -- the USB host cannot take
      * it over until tinyusb_driver_install() below arms the port. Load the vendor
-     * identification database now, before that race opens, so the read cannot be cut
-     * short by a soft unmount. */
+     * identification database and the Fieldwatch signature catalog now, before that race
+     * opens, so the reads cannot be cut short by a soft unmount. */
     (void)vendor_lookup_load("/sdcard/vendor_db.json");
+    (void)vendor_signature_load("/sdcard/fieldwatch-signatures-v2.json");
 
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG, "tinyusb_driver_install");
