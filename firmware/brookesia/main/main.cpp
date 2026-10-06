@@ -41,7 +41,6 @@
 #include "bletoolbox/BleToolboxApp.hpp"
 #include "ScreenCaptureApp.hpp"
 #include "sd_share.h"
-#include "vendor_lookup.h"
 
 using namespace esp_brookesia;
 using namespace esp_brookesia::gui;
@@ -570,10 +569,6 @@ extern "C" void app_main(void)
             ESP_LOGW("Main", "SD card sharing unavailable: %s", esp_err_to_name(share_err));
         }
     }
-
-    /* The vendor/device identification data lives in a file on the SD card, so it can be
-     * refreshed without rebuilding the firmware. Load it once the card is mounted. */
-    (void)vendor_lookup_load("/sdcard/vendor_db.bin");
 
     refresh_boot_loading(boot_loading, "Loading media...", 82);
     {

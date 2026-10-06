@@ -10,4 +10,5 @@ idf_component_register(
         esp32_p4_wifi6_touch_lcd_4b
         esp_driver_sdmmc
         esp_hw_support
+        VendorLookup
 )

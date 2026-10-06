@@ -68,11 +68,13 @@ esp_err_t vendor_lookup_load(const char *path)
     }
 
     if (fseek(f, 0, SEEK_END) != 0) {
+        ESP_LOGE(TAG, "fseek failed on %s", path);
         fclose(f);
         return ESP_FAIL;
     }
     const long sz = ftell(f);
     rewind(f);
+    ESP_LOGI(TAG, "reading %ld bytes from %s", sz, path);
     if (sz < 8) {
         fclose(f);
         return ESP_ERR_INVALID_SIZE;
@@ -83,10 +85,12 @@ esp_err_t vendor_lookup_load(const char *path)
         buf = (uint8_t *)heap_caps_malloc((size_t)sz, MALLOC_CAP_8BIT);
     }
     if (buf == NULL) {
+        ESP_LOGE(TAG, "out of memory for %ld-byte database", sz);
         fclose(f);
         return ESP_ERR_NO_MEM;
     }
     if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+        ESP_LOGE(TAG, "short read from %s", path);
         fclose(f);
         heap_caps_free(buf);
         return ESP_FAIL;

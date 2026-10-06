@@ -27,6 +27,7 @@
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_msc.h"
+#include "vendor_lookup.h"
 
 #include "bsp/esp-bsp.h"
 
@@ -147,6 +148,12 @@ esp_err_t sd_share_start(void)
     storage_cfg.fat_fs.do_not_format = true;                   /* never erase the user's media */
     ESP_RETURN_ON_ERROR(tinyusb_msc_new_storage_sdmmc(&storage_cfg, &s_msc), TAG,
                         "new_storage_sdmmc");
+
+    /* /sdcard is mounted and still owned by the device here -- the USB host cannot take
+     * it over until tinyusb_driver_install() below arms the port. Load the vendor
+     * identification database now, before that race opens, so the read cannot be cut
+     * short by a soft unmount. */
+    (void)vendor_lookup_load("/sdcard/vendor_db.bin");
 
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG, "tinyusb_driver_install");
