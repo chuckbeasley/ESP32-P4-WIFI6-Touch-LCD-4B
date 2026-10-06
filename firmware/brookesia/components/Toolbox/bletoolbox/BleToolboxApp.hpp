@@ -139,9 +139,6 @@ private:
 
     lv_obj_t *screens[SCREEN_COUNT];
 
-    /* Status strip across the top of every screen. */
-    lv_obj_t  *status_label;
-
     /* Scan */
     lv_obj_t  *scan_state_label;
     lv_obj_t  *scan_count_label;

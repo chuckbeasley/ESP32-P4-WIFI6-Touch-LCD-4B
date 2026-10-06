@@ -368,7 +368,6 @@ BleToolboxApp::BleToolboxApp():
     ESP_Brookesia_PhoneApp(
         esp_brookesia::systems::base::App::Config::SIMPLE_CONSTRUCTOR("BLE Toolbox", nullptr, true),
         ble_phone_app_config()),
-    status_label(nullptr),
     scan_state_label(nullptr),
     scan_count_label(nullptr),
     scan_list(nullptr),
@@ -617,8 +616,6 @@ bool BleToolboxApp::close(void)
     for (int i = 0; i < SCREEN_COUNT; i++) {
         screens[i] = nullptr;
     }
-
-    status_label = nullptr;
 
     scan_state_label = nullptr;
     scan_count_label = nullptr;
@@ -1156,16 +1153,6 @@ void BleToolboxApp::latchNotify(uint16_t attr_handle, const uint8_t *data, uint1
 
 void BleToolboxApp::updateStatus(void)
 {
-    if (status_label == nullptr) {
-        return;
-    }
-
-    char text[96];
-    snprintf(text, sizeof(text), "%s  -  %s",
-             service_up ? "BLE ready" : "BLE down",
-             scanning ? "scanning" : "idle");
-    lv_label_set_text(status_label, text);
-
     /* The Scan screen's state line doubles as the connection readout. connectTo()
      * sets it to "connecting...", so once the connection lands it must flip to
      * "connected" (matching the status-bar icon). */
@@ -1755,10 +1742,6 @@ void BleToolboxApp::buildMenu(void)
     /* The app's own title, one step above its menu entries so the hierarchy still reads:
      * entries are 28, screen titles 26. It was 24, which the enlarged entries overtook. */
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
-
-    status_label = lv_label_create(panel);
-    lv_obj_set_style_text_font(status_label, TOOLBOX_FONT_DETAIL, 0);
-    lv_label_set_text(status_label, "BLE not started");
 
     /* Only three entries without the transmit path, four with it. The entry appears
      * because the capability was compiled in, not because a flag hides a button — which
