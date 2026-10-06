@@ -20,6 +20,7 @@ idf_component_register(
         "include"
     REQUIRES
         bt
+        VendorLookup
     PRIV_REQUIRES
         esp_hosted
         esp_timer

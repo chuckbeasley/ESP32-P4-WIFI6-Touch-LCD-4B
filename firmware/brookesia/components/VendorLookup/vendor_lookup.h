@@ -39,6 +39,12 @@ const char *vendor_lookup_appearance(uint16_t appearance);
 /* Name for a Google Fast Pair 24-bit model ID, or NULL. */
 const char *vendor_lookup_fastpair(uint32_t model_id);
 
+/* Evaluate the classification rules for one AD field. Returns true and fills *kind (a
+ * ble_toolbox_adv_kind_t value) when a rule assigns an immediate kind; otherwise
+ * accumulates any matching flag bits into *flags and returns false. */
+bool vendor_rule_eval(uint8_t ad_type, const uint8_t *body, uint8_t body_len,
+                      uint32_t *flags, uint8_t *kind);
+
 #ifdef __cplusplus
 }
 #endif

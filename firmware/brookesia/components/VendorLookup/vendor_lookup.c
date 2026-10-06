@@ -21,6 +21,7 @@ static const char *TAG = "VendorLookup";
 #define VENDOR_SEC_APPEARANCE 3
 #define VENDOR_SEC_FASTPAIR   4
 #define VENDOR_SEC_COUNT      5
+#define VENDOR_TOTAL_SECTIONS 6
 
 #define VENDOR_MAGIC          0x42444C56u  /* "VLDB" little-endian */
 #define VENDOR_VERSION        1
@@ -37,6 +38,8 @@ typedef struct {
 } vendor_section_t;
 
 static vendor_section_t s_sec[VENDOR_SEC_COUNT];
+static const uint8_t *s_rules;
+static uint32_t s_rule_count;
 static uint8_t *s_buf;
 static bool s_loaded;
 
@@ -91,7 +94,7 @@ esp_err_t vendor_lookup_load(const char *path)
     fclose(f);
 
     if (rd_u32(buf) != VENDOR_MAGIC || rd_u16(buf + 4) != VENDOR_VERSION ||
-        rd_u16(buf + 6) != VENDOR_SEC_COUNT) {
+        rd_u16(buf + 6) != VENDOR_TOTAL_SECTIONS) {
         ESP_LOGE(TAG, "bad database header");
         heap_caps_free(buf);
         return ESP_ERR_INVALID_VERSION;
@@ -121,6 +124,20 @@ esp_err_t vendor_lookup_load(const char *path)
         s_sec[i].pool = (const char *)(buf + off);
         off += pool_size;
     }
+
+    /* Section 5: classification rules (count, then 12 bytes per rule). */
+    if (off + 4 > (size_t)sz) {
+        heap_caps_free(buf);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    s_rule_count = rd_u32(buf + off);
+    off += 4;
+    if (off + (size_t)s_rule_count * 12 > (size_t)sz) {
+        heap_caps_free(buf);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    s_rules = buf + off;
+    off += (size_t)s_rule_count * 12;
 
     if (s_buf != NULL) {
         heap_caps_free(s_buf);
@@ -184,4 +201,43 @@ const char *vendor_lookup_appearance(uint16_t appearance)
 const char *vendor_lookup_fastpair(uint32_t model_id)
 {
     return lookup_section(VENDOR_SEC_FASTPAIR, model_id);
+}
+
+bool vendor_rule_eval(uint8_t ad_type, const uint8_t *body, uint8_t body_len,
+                      uint32_t *flags, uint8_t *kind)
+{
+    if (!s_loaded || body == NULL) {
+        return false;
+    }
+    for (uint32_t i = 0; i < s_rule_count; i++) {
+        const uint8_t *r = s_rules + (size_t)i * 12;
+        if (r[0] != ad_type) {
+            continue;
+        }
+        const uint16_t key = (uint16_t)(r[1] | (r[2] << 8));
+        if (body_len < 2 || body[0] != (key & 0xFF) || body[1] != ((key >> 8) & 0xFF)) {
+            continue;
+        }
+        if (body_len < r[9]) {               /* min_len */
+            continue;
+        }
+        const uint8_t pat_off = r[3];
+        const uint8_t pat_len = r[4];
+        if (pat_len > 0) {
+            if (body_len < 2 + pat_off + pat_len ||
+                memcmp(body + 2 + pat_off, r + 5, pat_len) != 0) {
+                continue;
+            }
+        }
+        if (r[10] == 0) {                    /* assign kind */
+            if (kind != NULL) {
+                *kind = r[11];
+            }
+            return true;
+        }
+        if (flags != NULL) {                 /* set flag bit */
+            *flags |= (uint32_t)1 << r[11];
+        }
+    }
+    return false;
 }

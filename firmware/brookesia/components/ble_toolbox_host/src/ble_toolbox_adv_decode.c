@@ -19,6 +19,7 @@
  */
 
 #include "ble_toolbox_host.h"
+#include "vendor_lookup.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -61,16 +62,6 @@ static const char *const k_eddystone_expansions[] = {
     ".com/", ".org/", ".edu/", ".net/", ".info/", ".biz/", ".gov/",
     ".com", ".org", ".edu", ".net", ".info", ".biz", ".gov",
 };
-
-/* Appearance values that indicate eyewear. 0x0C80-range is "Eyewear" in the assigned
- * numbers; the Tactility app also treats a couple of neighbouring codes as possible
- * glasses (BleToolbox.cpp: isGlassAppearance). */
-static bool appearance_is_glasses(uint16_t appearance)
-{
-    return appearance == 0x0C80 ||      /* Eyewear */
-           appearance == 0x0C81 ||
-           appearance == 0x0C82;
-}
 
 const char *ble_toolbox_adv_kind_name(ble_toolbox_adv_kind_t kind)
 {
@@ -176,9 +167,7 @@ void ble_toolbox_adv_decode(const uint8_t *data, uint8_t len, ble_toolbox_adv_in
         return;
     }
 
-    bool saw_apple_continuity = false;
-    bool saw_glasses_hint = false;
-    uint8_t continuity_type = 0;
+    uint32_t flags = 0;
 
     for (uint8_t i = 0; i + 1 < len; ) {
         const uint8_t field_len = data[i];
@@ -193,102 +182,60 @@ void ble_toolbox_adv_decode(const uint8_t *data, uint8_t len, ble_toolbox_adv_in
         const uint8_t *body = &data[i + 2];
         const uint8_t body_len = (uint8_t)(field_len - 1);
 
-        switch (type) {
-        case ADV_TYPE_MANUFACTURER: {
-            if (body_len < 2) {
-                break;
-            }
-
-            const bool apple = (body[0] == MFR_APPLE_LOW && body[1] == MFR_APPLE_HIGH);
-            const bool google = (body[0] == MFR_GOOGLE_LOW && body[1] == MFR_GOOGLE_HIGH);
-
-            if (apple) {
+        /* Classification rules are runtime data (vendor_db.bin section 5), not code.
+         * A rule either assigns an immediate kind (returned true) or sets a deferred
+         * flag, resolved after the walk below. */
+        uint8_t kind = 0;
+        if (vendor_rule_eval(type, body, body_len, &flags, &kind)) {
+            switch ((ble_toolbox_adv_kind_t)kind) {
+            case BLE_ADV_IBEACON:
                 if (decode_ibeacon(body, body_len, out)) {
-                    return;                         /* iBeacon is specific; take it */
+                    return;
                 }
-
-                /* Apple continuity: [4C 00][type][...]. An AirTag and a pair of
-                 * smart glasses both arrive this way, so the type byte is what
-                 * separates them. */
-                if (body_len >= 3) {
-                    continuity_type = body[2];
-                    if (continuity_type == APPLE_CONTINUITY_TYPE_FINDMY) {
-                        saw_apple_continuity = true;
-                    } else if (continuity_type == APPLE_CONTINUITY_TYPE_NEARBY ||
-                               continuity_type == APPLE_CONTINUITY_TYPE_NEARBY2) {
-                        saw_apple_continuity = true;
-
-                        /* A length of 0x19 or more on a Nearby advert is what the
-                         * Tactility app reads as a possible smart-glasses
-                         * advertisement; the extra bytes carry a device model. */
-                        if (body_len >= 0x19) {
-                            saw_glasses_hint = true;
-                        }
-                    }
-                }
-            } else if (google) {
+                break;
+            case BLE_ADV_EDDYSTONE_UID:
+            case BLE_ADV_EDDYSTONE_URL:
+            case BLE_ADV_EDDYSTONE_TLM:
                 if (decode_eddystone(body, body_len, out)) {
                     return;
                 }
-            } else if (body[0] == MFR_TILE_LOW && body[1] == MFR_TILE_HIGH) {
-                /* A Tile tracker advertises under its own manufacturer company ID. */
-                out->kind = BLE_ADV_TILE;
-                return;
-            }
-            break;
-        }
-
-        case ADV_TYPE_SERVICE_DATA_16: {
-            if (body_len < 2) {
                 break;
-            }
-            const uint16_t svc_uuid = (uint16_t)(body[0] | (body[1] << 8));
-            if (svc_uuid == SVC_FAST_PAIR && body_len >= 5) {
-                /* [0x2C 0xFE][3-byte model id, big-endian] — pairing mode */
-                out->fastpair_model_id = ((uint32_t)body[2] << 16) |
-                                         ((uint32_t)body[3] << 8) |
-                                         (uint32_t)body[4];
-                out->kind = BLE_ADV_FAST_PAIR;
-                return;
-            }
-            if (svc_uuid == SVC_EXPOSURE_NOTIF && body_len >= 18) {
-                /* [0x6F 0xFD][16-byte rolling proximity identifier][4-byte metadata] */
+            case BLE_ADV_FAST_PAIR:
+                if (body_len >= 5) {
+                    out->fastpair_model_id = ((uint32_t)body[2] << 16) |
+                                             ((uint32_t)body[3] << 8) |
+                                             (uint32_t)body[4];
+                    out->kind = BLE_ADV_FAST_PAIR;
+                    return;
+                }
+                break;
+            case BLE_ADV_EXPOSURE_NOTIFICATION:
                 out->kind = BLE_ADV_EXPOSURE_NOTIFICATION;
                 return;
+            case BLE_ADV_TILE:
+                out->kind = BLE_ADV_TILE;
+                return;
+            default:
+                break;
             }
-            break;
-        }
-
-        case ADV_TYPE_APPEARANCE:
-            if (body_len >= 2) {
-                const uint16_t appearance = (uint16_t)(body[0] | (body[1] << 8));
-                if (appearance_is_glasses(appearance)) {
-                    saw_glasses_hint = true;
-                }
-            }
-            break;
-
-        default:
-            break;
         }
 
         i = (uint8_t)(i + 1 + field_len);
     }
 
-    if (saw_apple_continuity) {
-        /* FindMy wins over the glasses hint: an advert that identifies as an
-         * offline-finding tracker is one, whatever else it carries. */
-        if (continuity_type == APPLE_CONTINUITY_TYPE_FINDMY) {
-            out->kind = BLE_ADV_APPLE_FINDMY;
-            out->findmy_status = 0;
-            out->findmy_separated = false;
-        } else if (saw_glasses_hint) {
+    /* Deferred flags: FindMy wins over the glasses hint, glasses wins over plain Nearby. */
+    if (flags & (1u << 0)) {
+        out->kind = BLE_ADV_APPLE_FINDMY;
+        out->findmy_status = 0;
+        out->findmy_separated = false;
+    } else if (flags & (1u << 1)) {
+        if (flags & (1u << 2)) {
             out->kind = BLE_ADV_SMART_GLASSES;
             out->reason = "Nearby Info advert with a device model";
         } else {
             out->kind = BLE_ADV_APPLE_NEARBY;
         }
-    } else if (saw_glasses_hint) {
+    } else if (flags & (1u << 2)) {
         out->kind = BLE_ADV_SMART_GLASSES;
         out->reason = "eyewear appearance";
     }

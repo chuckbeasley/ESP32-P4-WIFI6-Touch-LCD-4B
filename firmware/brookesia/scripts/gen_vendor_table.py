@@ -42,7 +42,7 @@ APPEAR_URL = ("https://bitbucket.org/bluetooth-SIG/public/raw/main/"
 
 MAGIC = b"VLDB"
 VERSION = 1
-SECTIONS = 5
+SECTIONS = 6
 
 # Google Fast Pair 24-bit model IDs (Fieldwatch's FastPairModels.kt, public listings).
 FASTPAIR = [
@@ -101,6 +101,33 @@ FASTPAIR = [
     (0xF00306, "LG HBS-1700"), (0xF00307, "LG HBS-1120"),
     (0xF00308, "LG HBS-1125"), (0xF00309, "LG HBS-2000"),
     (0xF0B77F, "soundcore Liberty 4 NC"), (0xF52494, "JBL Buds Pro"),
+]
+
+# Classification rules, each 12 bytes: (ad_type, key, pat_off, pat_len, pat, min_len,
+# action, arg). ad_type is the AD field type (0xFF manufacturer, 0x16 service data,
+# 0x19 appearance); key is the company ID / UUID / appearance (little-endian as on the
+# wire, matching body[0..1]); pat is matched at body[2 + pat_off]; min_len is a minimum
+# body length; action 0 assigns a kind (arg = kind id), action 1 sets a flag bit
+# (arg = bit index). Kind ids match ble_toolbox_adv_kind_t; flags: 0=FindMy, 1=Nearby,
+# 2=glasses.
+RULES = [
+    # Immediate kinds (first match wins).
+    (0xFF, 0x004C, 0, 2, b"\x02\x15", 0, 0, 1),    # iBeacon
+    (0xFF, 0xFEAA, 2, 1, b"\x00", 0, 0, 2),        # Eddystone UID
+    (0xFF, 0xFEAA, 2, 1, b"\x10", 0, 0, 3),        # Eddystone URL
+    (0xFF, 0xFEAA, 2, 1, b"\x20", 0, 0, 4),        # Eddystone TLM
+    (0xFF, 0x0157, 0, 0, b"", 0, 0, 10),           # Tile
+    (0x16, 0xFE2C, 0, 0, b"", 0, 0, 8),            # Fast Pair
+    (0x16, 0xFD6F, 0, 0, b"", 0, 0, 9),            # Exposure Notification
+    # Deferred flags (resolved after the whole advertisement is walked).
+    (0xFF, 0x004C, 0, 1, b"\x12", 0, 1, 0),        # FindMy
+    (0xFF, 0x004C, 0, 1, b"\x10", 0, 1, 1),        # Nearby
+    (0xFF, 0x004C, 0, 1, b"\x0F", 0, 1, 1),        # Nearby
+    (0xFF, 0x004C, 0, 1, b"\x10", 0x19, 1, 2),     # Nearby + long -> glasses
+    (0xFF, 0x004C, 0, 1, b"\x0F", 0x19, 1, 2),     # Nearby + long -> glasses
+    (0x19, 0x0C80, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
+    (0x19, 0x0C81, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
+    (0x19, 0x0C82, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
 ]
 
 
@@ -215,6 +242,23 @@ def pack_section(rows: list[tuple[int, str]]) -> bytes:
     return bytes(out)
 
 
+def pack_rules(rules: list[tuple]) -> bytes:
+    """Pack the classification rules: count, then 12 bytes per rule."""
+    out = bytearray()
+    out += struct.pack("<I", len(rules))
+    for ad_type, key, pat_off, pat_len, pat, min_len, action, arg in rules:
+        pat = (pat + b"\x00" * 4)[:4]
+        out.append(ad_type)
+        out += struct.pack("<H", key)
+        out.append(pat_off)
+        out.append(pat_len)
+        out += pat
+        out.append(min_len)
+        out.append(action)
+        out.append(arg)
+    return bytes(out)
+
+
 def main() -> int:
     sections = [
         parse_oui(fetch(OUI_URL)),
@@ -229,12 +273,14 @@ def main() -> int:
     blob += struct.pack("<HH", VERSION, SECTIONS)
     for rows in sections:
         blob += pack_section(rows)
+    blob += pack_rules(RULES)
 
     OUT_BIN.write_bytes(blob)
-    print("wrote %s (%d bytes, %d sections)"
-          % (OUT_BIN, len(blob), SECTIONS))
+    print("wrote %s (%d bytes, %d sections, %d rules)"
+          % (OUT_BIN, len(blob), SECTIONS, len(RULES)))
     for name, rows in zip(("OUI", "Company", "Service", "Appearance", "FastPair"), sections):
         print("  %-10s %d entries" % (name, len(rows)))
+    print("  %-10s %d entries" % ("Rules", len(RULES)))
     return 0
 
 
