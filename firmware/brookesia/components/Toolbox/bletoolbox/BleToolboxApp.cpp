@@ -1181,8 +1181,12 @@ void BleToolboxApp::renderScanRows(void)
 
             lv_label_set_text(w->name, a->name[0] != '\0' ? a->name : "No advertised name");
             char buf[96];
-            kind_text((ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id, buf, sizeof(buf));
-            lv_label_set_text(w->kind, buf);
+            if (a->signature_name[0] != '\0') {
+                lv_label_set_text(w->kind, a->signature_name);
+            } else {
+                kind_text((ble_toolbox_adv_kind_t)a->kind, a->fastpair_model_id, buf, sizeof(buf));
+                lv_label_set_text(w->kind, buf);
+            }
             ident_vendor_type(a->company_id, a->service_uuid, a->appearance, buf, sizeof(buf));
             lv_label_set_text(w->vt, buf);
             lv_label_set_text(w->addr, a->addr_str);

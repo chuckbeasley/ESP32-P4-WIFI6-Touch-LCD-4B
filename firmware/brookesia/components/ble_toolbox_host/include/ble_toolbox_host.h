@@ -50,6 +50,7 @@ typedef struct {
     uint16_t appearance;           /* GAP appearance value, 0 when none */
     uint8_t  kind;                 /* ble_toolbox_adv_kind_t, decoded from the payload */
     uint32_t fastpair_model_id;    /* Fast Pair model ID when kind == BLE_ADV_FAST_PAIR */
+    char     signature_name[48];   /* Fieldwatch fleet name, empty when nothing matched */
 } ble_toolbox_adv_t;
 
 /* A raw advertisement, for the observer screen. Unlike the listing above this keeps

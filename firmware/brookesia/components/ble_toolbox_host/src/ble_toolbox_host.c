@@ -14,6 +14,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "vendor_signature.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -120,12 +121,28 @@ static bool addr_is_random(const uint8_t addr[6])
 
 /* Identification extracted from one advertisement's AD structures in a single walk:
  * the Bluetooth SIG company ID (manufacturer-specific 0xFF), the first 16-bit service
- * UUID (0x02/0x03), and the GAP appearance (0x19). */
+ * UUID (0x02/0x03), the service-data UUID + payload (0x16), and the GAP appearance
+ * (0x19). The manufacturer and service payloads are kept as hex for Fieldwatch
+ * signature matching. */
 typedef struct {
     uint16_t company_id;
     uint16_t service_uuid;
+    uint16_t svc_data_uuid;     /* 0x16 service data UUID, 0 when none */
     uint16_t appearance;
+    char mfg_hex[48];           /* 0xFF payload hex after the company ID */
+    char svc_hex[48];           /* 0x16 payload hex after the UUID */
 } adv_ident_t;
+
+static void hex_encode(const uint8_t *p, uint8_t n, char *out, size_t cap)
+{
+    static const char h[] = "0123456789ABCDEF";
+    size_t k = 0;
+    for (uint8_t i = 0; i < n && k + 2 < cap; i++) {
+        out[k++] = h[p[i] >> 4];
+        out[k++] = h[p[i] & 0x0F];
+    }
+    out[k] = '\0';
+}
 
 static void adv_identify(const uint8_t *data, uint8_t len, adv_ident_t *out)
 {
@@ -145,12 +162,21 @@ static void adv_identify(const uint8_t *data, uint8_t len, adv_ident_t *out)
         case 0xFF:  /* manufacturer specific: 2-byte little-endian company ID */
             if (body_len >= 2 && out->company_id == 0) {
                 out->company_id = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+                hex_encode(body + 2, (uint8_t)(body_len - 2), out->mfg_hex,
+                           sizeof(out->mfg_hex));
             }
             break;
         case 0x02:  /* complete 16-bit service UUIDs */
         case 0x03:  /* incomplete 16-bit service UUIDs */
             if (body_len >= 2 && out->service_uuid == 0) {
                 out->service_uuid = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+            }
+            break;
+        case 0x16:  /* service data (16-bit UUID) */
+            if (body_len >= 2 && out->svc_data_uuid == 0) {
+                out->svc_data_uuid = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
+                hex_encode(body + 2, (uint8_t)(body_len - 2), out->svc_hex,
+                           sizeof(out->svc_hex));
             }
             break;
         case 0x19:  /* appearance */
@@ -208,6 +234,22 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
                                  ? fields.name_len : sizeof(adv.name) - 1;
                 memcpy(adv.name, fields.name, n);
                 adv.name[n] = '\0';
+            }
+
+            {
+                ble_signature_input_t sin;
+                memset(&sin, 0, sizeof(sin));
+                sin.mac = adv.addr;
+                sin.name = adv.name[0] != '\0' ? adv.name : NULL;
+                sin.company_id = adv.company_id;
+                sin.mfg_hex = id.mfg_hex;
+                sin.svc_uuid = (id.svc_data_uuid != 0) ? id.svc_data_uuid : id.service_uuid;
+                sin.svc_hex = id.svc_hex;
+                const char *sig = vendor_signature_match(&sin, NULL);
+                if (sig != NULL) {
+                    strncpy(adv.signature_name, sig, sizeof(adv.signature_name) - 1);
+                    adv.signature_name[sizeof(adv.signature_name) - 1] = '\0';
+                }
             }
 
             s_ble.cbs.on_adv(&adv, s_ble.user);
@@ -285,6 +327,22 @@ static int tb_ble_gap_event(struct ble_gap_event *event, void *arg)
                                  ? fields.name_len : sizeof(adv.name) - 1;
                 memcpy(adv.name, fields.name, n);
                 adv.name[n] = '\0';
+            }
+
+            {
+                ble_signature_input_t sin;
+                memset(&sin, 0, sizeof(sin));
+                sin.mac = adv.addr;
+                sin.name = adv.name[0] != '\0' ? adv.name : NULL;
+                sin.company_id = adv.company_id;
+                sin.mfg_hex = id.mfg_hex;
+                sin.svc_uuid = (id.svc_data_uuid != 0) ? id.svc_data_uuid : id.service_uuid;
+                sin.svc_hex = id.svc_hex;
+                const char *sig = vendor_signature_match(&sin, NULL);
+                if (sig != NULL) {
+                    strncpy(adv.signature_name, sig, sizeof(adv.signature_name) - 1);
+                    adv.signature_name[sizeof(adv.signature_name) - 1] = '\0';
+                }
             }
 
             s_ble.cbs.on_adv(&adv, s_ble.user);
