@@ -153,7 +153,7 @@ esp_err_t sd_share_start(void)
      * it over until tinyusb_driver_install() below arms the port. Load the vendor
      * identification database now, before that race opens, so the read cannot be cut
      * short by a soft unmount. */
-    (void)vendor_lookup_load("/sdcard/vendor_db.bin");
+    (void)vendor_lookup_load("/sdcard/vendor_db.json");
 
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG, "tinyusb_driver_install");

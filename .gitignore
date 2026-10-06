@@ -34,3 +34,6 @@ releases/downloads/
 *.bak
 Thumbs.db
 .DS_Store
+
+# Generated vendor identification database (scripts/gen_vendor_table.py)
+firmware/brookesia/components/VendorLookup/vendor_db.json

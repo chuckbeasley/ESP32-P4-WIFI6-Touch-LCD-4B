@@ -5,4 +5,6 @@
 idf_component_register(
     SRCS "vendor_lookup.c"
     INCLUDE_DIRS "."
+    REQUIRES
+        json
 )

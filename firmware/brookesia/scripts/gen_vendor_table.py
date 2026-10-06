@@ -3,34 +3,43 @@
 
 Downloads the IEEE OUI registry and Bluetooth SIG assigned-number lists (the same
 sources Fieldwatch compiles into its radiodb.bin), adds the Fast Pair model list, and
-packs them into a single binary the firmware loads at runtime from the SD card
-(/sdcard/vendor_db.bin). Updating the database is then a matter of re-running this
-script and copying the file onto the card -- no firmware rebuild.
+writes them all as a single JSON file the firmware loads at runtime from the SD card
+(/sdcard/vendor_db.json). Updating the database is then a matter of providing a new
+JSON file on the card -- no firmware rebuild, no binary conversion step.
 
-Binary layout (all little-endian):
-    u32 magic        "VLDB"
-    u16 version      1
-    u16 sections     5
-    then five sections in this fixed order: OUI(24), Company(16), Service(16),
-    Appearance(16), FastPair(24). Each section is:
-        u32 count
-        count * { u32 key, u32 name_off }   # sorted ascending by key
-        u32 pool_size
-        pool_size bytes of NUL-terminated names
+JSON layout:
+    {
+      "version": 1,
+      "oui":        [[key, "name"], ...],   # sorted ascending by key
+      "company":    [[key, "name"], ...],
+      "service":    [[key, "name"], ...],
+      "appearance": [[key, "name"], ...],
+      "fastpair":   [[key, "name"], ...],
+      "rules": [
+        {"type": 255, "key": 76, "off": 0, "pattern": "0215", "min": 0, "kind": 1},
+        {"type": 255, "key": 76, "off": 0, "pattern": "12", "min": 0, "flag": 0},
+        ...
+      ]
+    }
+
+A rule's "type" is the AD field type (255 manufacturer, 22 service data 16-bit,
+25 appearance); "key" is the company ID / UUID / appearance value; "off" is the pattern
+offset relative to body[2]; "pattern" is hex (empty for no pattern); "min" is a minimum
+body length; and exactly one of "kind" (ble_toolbox_adv_kind_t, an immediate match) or
+"flag" (a deferred flag bit index: 0 FindMy, 1 Nearby, 2 glasses) selects the action.
 """
 from __future__ import annotations
 
 import csv
 import io
+import json
 import re
-import struct
 import sys
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_INC = ROOT / "components" / "VendorLookup" / "vendor_table.inc"
-OUT_BIN = ROOT / "components" / "VendorLookup" / "vendor_db.bin"
+OUT_JSON = ROOT / "components" / "VendorLookup" / "vendor_db.json"
 
 OUI_URL = "https://standards-oui.ieee.org/oui/oui.csv"
 CO_URL = ("https://bitbucket.org/bluetooth-SIG/public/raw/main/"
@@ -40,9 +49,7 @@ SVC_URL = ("https://bitbucket.org/bluetooth-SIG/public/raw/main/"
 APPEAR_URL = ("https://bitbucket.org/bluetooth-SIG/public/raw/main/"
               "assigned_numbers/core/appearance_values.yaml")
 
-MAGIC = b"VLDB"
 VERSION = 1
-SECTIONS = 6
 
 # Google Fast Pair 24-bit model IDs (Fieldwatch's FastPairModels.kt, public listings).
 FASTPAIR = [
@@ -103,31 +110,25 @@ FASTPAIR = [
     (0xF0B77F, "soundcore Liberty 4 NC"), (0xF52494, "JBL Buds Pro"),
 ]
 
-# Classification rules, each 12 bytes: (ad_type, key, pat_off, pat_len, pat, min_len,
-# action, arg). ad_type is the AD field type (0xFF manufacturer, 0x16 service data,
-# 0x19 appearance); key is the company ID / UUID / appearance (little-endian as on the
-# wire, matching body[0..1]); pat is matched at body[2 + pat_off]; min_len is a minimum
-# body length; action 0 assigns a kind (arg = kind id), action 1 sets a flag bit
-# (arg = bit index). Kind ids match ble_toolbox_adv_kind_t; flags: 0=FindMy, 1=Nearby,
-# 2=glasses.
+# Classification rules: (ad_type, key, pat_off, pattern_hex, min_len, action, arg).
+# action 0 = assign kind (arg = ble_toolbox_adv_kind_t); action 1 = set flag bit
+# (arg = bit index: 0 FindMy, 1 Nearby, 2 glasses).
 RULES = [
-    # Immediate kinds (first match wins).
-    (0xFF, 0x004C, 0, 2, b"\x02\x15", 0, 0, 1),    # iBeacon
-    (0xFF, 0xFEAA, 2, 1, b"\x00", 0, 0, 2),        # Eddystone UID
-    (0xFF, 0xFEAA, 2, 1, b"\x10", 0, 0, 3),        # Eddystone URL
-    (0xFF, 0xFEAA, 2, 1, b"\x20", 0, 0, 4),        # Eddystone TLM
-    (0xFF, 0x0157, 0, 0, b"", 0, 0, 10),           # Tile
-    (0x16, 0xFE2C, 0, 0, b"", 0, 0, 8),            # Fast Pair
-    (0x16, 0xFD6F, 0, 0, b"", 0, 0, 9),            # Exposure Notification
-    # Deferred flags (resolved after the whole advertisement is walked).
-    (0xFF, 0x004C, 0, 1, b"\x12", 0, 1, 0),        # FindMy
-    (0xFF, 0x004C, 0, 1, b"\x10", 0, 1, 1),        # Nearby
-    (0xFF, 0x004C, 0, 1, b"\x0F", 0, 1, 1),        # Nearby
-    (0xFF, 0x004C, 0, 1, b"\x10", 0x19, 1, 2),     # Nearby + long -> glasses
-    (0xFF, 0x004C, 0, 1, b"\x0F", 0x19, 1, 2),     # Nearby + long -> glasses
-    (0x19, 0x0C80, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
-    (0x19, 0x0C81, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
-    (0x19, 0x0C82, 0, 0, b"", 0, 1, 2),            # appearance -> glasses
+    (0xFF, 0x004C, 0, "0215", 0, 0, 1),    # iBeacon
+    (0xFF, 0xFEAA, 2, "00", 0, 0, 2),      # Eddystone UID
+    (0xFF, 0xFEAA, 2, "10", 0, 0, 3),      # Eddystone URL
+    (0xFF, 0xFEAA, 2, "20", 0, 0, 4),      # Eddystone TLM
+    (0xFF, 0x0157, 0, "", 0, 0, 10),       # Tile
+    (0x16, 0xFE2C, 0, "", 0, 0, 8),        # Fast Pair
+    (0x16, 0xFD6F, 0, "", 0, 0, 9),        # Exposure Notification
+    (0xFF, 0x004C, 0, "12", 0, 1, 0),      # FindMy
+    (0xFF, 0x004C, 0, "10", 0, 1, 1),      # Nearby
+    (0xFF, 0x004C, 0, "0F", 0, 1, 1),      # Nearby
+    (0xFF, 0x004C, 0, "10", 0x19, 1, 2),   # Nearby + long -> glasses
+    (0xFF, 0x004C, 0, "0F", 0x19, 1, 2),   # Nearby + long -> glasses
+    (0x19, 0x0C80, 0, "", 0, 1, 2),        # appearance -> glasses
+    (0x19, 0x0C81, 0, "", 0, 1, 2),        # appearance -> glasses
+    (0x19, 0x0C82, 0, "", 0, 1, 2),        # appearance -> glasses
 ]
 
 
@@ -220,67 +221,35 @@ def parse_appearance(data: bytes) -> list[tuple[int, str]]:
     return rows
 
 
-def pack_section(rows: list[tuple[int, str]]) -> bytes:
-    """Pack one section: count, sorted {key, off} records, then the name pool."""
-    rows = sorted(set(rows))
-    out = bytearray()
-    out += struct.pack("<I", len(rows))
-
-    # Lay out the string pool first so offsets are known.
-    pool = bytearray()
-    records = []
-    for key, name in rows:
-        name_bytes = name.encode("utf-8") + b"\0"
-        off = len(pool)
-        pool += name_bytes
-        records.append((key, off))
-
-    for key, off in records:
-        out += struct.pack("<II", key, off)
-    out += struct.pack("<I", len(pool))
-    out += pool
-    return bytes(out)
-
-
-def pack_rules(rules: list[tuple]) -> bytes:
-    """Pack the classification rules: count, then 12 bytes per rule."""
-    out = bytearray()
-    out += struct.pack("<I", len(rules))
-    for ad_type, key, pat_off, pat_len, pat, min_len, action, arg in rules:
-        pat = (pat + b"\x00" * 4)[:4]
-        out.append(ad_type)
-        out += struct.pack("<H", key)
-        out.append(pat_off)
-        out.append(pat_len)
-        out += pat
-        out.append(min_len)
-        out.append(action)
-        out.append(arg)
-    return bytes(out)
-
-
 def main() -> int:
-    sections = [
-        parse_oui(fetch(OUI_URL)),
-        parse_company(fetch(CO_URL)),
-        parse_service(fetch(SVC_URL)),
-        parse_appearance(fetch(APPEAR_URL)),
-        list(FASTPAIR),
-    ]
+    tables = {
+        "oui": parse_oui(fetch(OUI_URL)),
+        "company": parse_company(fetch(CO_URL)),
+        "service": parse_service(fetch(SVC_URL)),
+        "appearance": parse_appearance(fetch(APPEAR_URL)),
+        "fastpair": list(FASTPAIR),
+    }
 
-    blob = bytearray()
-    blob += MAGIC
-    blob += struct.pack("<HH", VERSION, SECTIONS)
-    for rows in sections:
-        blob += pack_section(rows)
-    blob += pack_rules(RULES)
+    rules = []
+    for ad_type, key, off, pattern, min_len, action, arg in RULES:
+        rule = {"type": ad_type, "key": key, "off": off, "pattern": pattern,
+                "min": min_len}
+        if action == 0:
+            rule["kind"] = arg
+        else:
+            rule["flag"] = arg
+        rules.append(rule)
 
-    OUT_BIN.write_bytes(blob)
-    print("wrote %s (%d bytes, %d sections, %d rules)"
-          % (OUT_BIN, len(blob), SECTIONS, len(RULES)))
-    for name, rows in zip(("OUI", "Company", "Service", "Appearance", "FastPair"), sections):
+    db = {"version": VERSION, "rules": rules}
+    for name, rows in tables.items():
+        db[name] = [[k, n] for k, n in sorted(set(rows))]
+
+    OUT_JSON.write_text(json.dumps(db, ensure_ascii=False, separators=(",", ":")),
+                        encoding="utf-8")
+    print("wrote %s (%d bytes)" % (OUT_JSON, OUT_JSON.stat().st_size))
+    for name, rows in tables.items():
         print("  %-10s %d entries" % (name, len(rows)))
-    print("  %-10s %d entries" % ("Rules", len(RULES)))
+    print("  %-10s %d entries" % ("rules", len(rules)))
     return 0
 
 
