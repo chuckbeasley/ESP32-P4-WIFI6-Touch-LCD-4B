@@ -40,3 +40,6 @@ firmware/brookesia/components/VendorLookup/vendor_db.json
 
 # Downloaded Fieldwatch signature catalog (runtime data, not source)
 firmware/brookesia/components/VendorLookup/fieldwatch-signatures-v2.json
+
+# Parsed Fast Pair cache written by scripts/sync_fieldwatch.py
+firmware/brookesia/scripts/fastpair_models.json

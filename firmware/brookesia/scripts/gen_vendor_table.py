@@ -110,6 +110,16 @@ FASTPAIR = [
     (0xF0B77F, "soundcore Liberty 4 NC"), (0xF52494, "JBL Buds Pro"),
 ]
 
+
+def load_fastpair():
+    """Fast Pair list, overridable by scripts/sync_fieldwatch.py (writes
+    fastpair_models.json next to this file from Fieldwatch's FastPairModels.kt)."""
+    fp_json = Path(__file__).resolve().parent / "fastpair_models.json"
+    if fp_json.exists():
+        return [(int(k), str(n)) for k, n in json.loads(fp_json.read_text(encoding="utf-8"))]
+    return list(FASTPAIR)
+
+
 # Classification rules: (ad_type, key, pat_off, pattern_hex, min_len, action, arg).
 # action 0 = assign kind (arg = ble_toolbox_adv_kind_t); action 1 = set flag bit
 # (arg = bit index: 0 FindMy, 1 Nearby, 2 glasses).
@@ -227,7 +237,7 @@ def main() -> int:
         "company": parse_company(fetch(CO_URL)),
         "service": parse_service(fetch(SVC_URL)),
         "appearance": parse_appearance(fetch(APPEAR_URL)),
-        "fastpair": list(FASTPAIR),
+        "fastpair": load_fastpair(),
     }
 
     rules = []
